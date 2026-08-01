@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+config.toml
+
+# TrustGate runtime state
+.trustgate/
+logs/
+*.jsonl
+
+# Local agent/editor settings
+.claude/settings.local.json
+
+# Internal planning documents. The v3.0 build document contains business
+# strategy, revenue targets, the OSS/paid split and launch plans — none of which
+# should land in a repository that is intended to go public. Deliberately left
+# untracked so a `git push` cannot leak them. Delete this rule if you want them
+# versioned in a private repo.
+*.docx
+
+# OS
+.DS_Store

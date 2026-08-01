@@ -1,0 +1,69 @@
+[project]
+name = "trustgate"
+version = "0.1.0"
+description = "A control and audit layer for AI agents: deterministic policy decisions with a tamper-evident audit trail."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Karna Venkata Lokesh Reddy" }]
+keywords = ["ai-agents", "policy", "governance", "audit", "security", "claude-code"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+]
+dependencies = [
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+]
+
+# The hot path (`trustgate check`, called by the coding hook on every tool call)
+# imports only the core + stdlib. Server and provider SDKs are extras so the
+# hook never pays their import cost.
+[project.optional-dependencies]
+server = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+]
+judge = [
+    "httpx>=0.27",
+]
+all = [
+    "trustgate[server,judge]",
+]
+
+[project.scripts]
+trustgate = "trustgate.api.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/trustgate/trustgate"
+Issues = "https://github.com/trustgate/trustgate/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["trustgate"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
