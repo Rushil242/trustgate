@@ -93,20 +93,18 @@ class Engine:
                     modifications.update(jr.modifications)
                 verdict = combine_verdicts(verdict, jr.verdict)
 
-            elif needs_judge:
-                # A guard flagged this as suspicious and there is no judge to
-                # resolve it. Allowing here would mean the answer to "is this
-                # safe?" is "nobody knows", which is the one answer that must
-                # never read as yes. Same rule as a judge that times out.
+            elif needs_judge or in_scope:
+                # Something asked for a judgment and there is no judge to give
+                # one: either a guard was uncertain, or a reasoning principle's
+                # prefilter fired. Allowing here would mean the answer to "is
+                # this safe?" is "nobody knows", which is the one answer that
+                # must never read as yes. Same rule as a judge that times out.
                 verdict = combine_verdicts(verdict, Verdict.escalate)
                 reasons.append(
                     Reason(
                         guard="engine",
                         rule_id="unresolved-uncertainty",
-                        message=(
-                            "A guard was uncertain and no judge is configured to "
-                            "resolve it; escalating rather than allowing"
-                        ),
+                        message=_unresolved_message(needs_judge, in_scope),
                         severity="medium",
                     )
                 )
@@ -152,6 +150,22 @@ class Engine:
                     )
                 ],
             )
+
+
+def _unresolved_message(needs_judge: bool, in_scope: list) -> str:
+    """Say which thing wanted a judgment, so the escalation is actionable."""
+    if in_scope:
+        named = ", ".join(p.id for p in in_scope[:3])
+        return (
+            f"Reasoning principle(s) apply here ({named}) but no judge is "
+            "configured to evaluate them; escalating rather than allowing"
+        )
+    if needs_judge:
+        return (
+            "A guard was uncertain and no judge is configured to resolve it; "
+            "escalating rather than allowing"
+        )
+    return "Unresolved judgment; escalating rather than allowing"
 
 
 def build_engine(

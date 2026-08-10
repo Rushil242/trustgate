@@ -54,11 +54,15 @@ principles:
         - "(?i)\\b(emergency|urgent|right now|hurry)\\b.{0,40}\\b(access|account|refund|reset)\\b"
     effect: block
 
+  # `both`, not `reasoning`: redirecting where money goes is high-risk whatever
+  # the caller says, so the tool match escalates on its own and the judge adds
+  # nuance when one is configured. A reasoning-only rule is unenforced whenever
+  # no judge is available, which is the wrong default for a payment destination.
   - id: no-payment-to-new-destination
     statement: >-
       Never send a payment or payment link to an address, phone number, or
       account that was supplied during this call rather than already on file.
-    enforcement: reasoning
+    enforcement: both
     severity: critical
     match:
       tool: [send_payment_link, transfer_funds, update_payout_account]

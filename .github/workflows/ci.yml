@@ -39,8 +39,17 @@ jobs:
 
       # Fails on one missed attack or one blocked control. This is the gate that
       # stops a refactor from quietly turning enforcement off.
-      - name: Red-team suite
+      - name: Red-team suite (coding)
         run: uv run trustgate test -c trustgate/policies/starter.coding.yaml
+
+      - name: Red-team suite (voice)
+        run: |
+          uv run trustgate test \
+            -c trustgate/policies/starter.voice.yaml \
+            --payloads redteam/payloads.voice.json
+
+      - name: Voice example runs
+        run: uv run python -m trustgate.adapters.voice.examples.function_calling_loop
 
   docker:
     runs-on: ubuntu-latest

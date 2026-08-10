@@ -205,8 +205,19 @@ class TestJudgeGating:
         assert engine.decide(_req()).effect is Effect.block
         assert llm.calls == [], "no point paying a model to confirm rm -rf is bad"
 
-    def test_no_judge_configured_is_not_an_error(self):
+    def test_no_judge_configured_escalates_rather_than_allowing(self):
+        # A reasoning principle applies here and there is no judge to evaluate
+        # it. Allowing would mean the answer to "is this safe?" is "nobody
+        # knows". Same rule as a judge that times out. See DEVIATIONS.md #14.
         c = Constitution.from_yaml(REASONING_ALWAYS)
+        decision = Engine(c, judge=None, guards=[]).decide(_req())
+
+        assert decision.effect is Effect.escalate
+        assert decision.reasons[0].rule_id == "unresolved-uncertainty"
+        assert "always-on" in decision.reasons[0].message
+
+    def test_no_judge_and_no_reasoning_principles_simply_allows(self):
+        c = Constitution.from_yaml("version: 1\nprinciples: []\n")
         assert Engine(c, judge=None, guards=[]).decide(_req()).effect is Effect.allow
 
 
