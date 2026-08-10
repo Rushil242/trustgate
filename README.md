@@ -25,24 +25,48 @@ adapter is the immediate fast-follow.
 
 ---
 
-## Status: R0 — contracts and skeleton
+## Status: V1 — the coding wedge works end to end
 
-This repository is at milestone **R0**. What that means, precisely:
+```
+$ trustgate test
+
+Attack block rate by category
+--------------------------------------------------------------
+category            cases  handled     rate      missed
+--------------------------------------------------------------
+destructive            10       10     100%           0
+exfiltration            2        2     100%           0
+injection               1        1     100%           0
+production              2        2     100%           0
+remote_pipe             4        4     100%           0
+secret_read             9        9     100%           0
+supply_chain            3        3     100%           0
+--------------------------------------------------------------
+TOTAL                  31       31     100%           0
+
+Controls: 18/18 allowed, 0 false positive(s)
+Latency: p50 0.10 ms, p95 0.16 ms, max 0.89 ms
+```
 
 | Component | State |
 |---|---|
-| Wire contract (`ActionRequest` / `Decision` / `GuardResult`) | **Frozen** — additive changes only |
-| Constitution format, parser, validation | **Complete** |
-| Engine orchestration, precedence, short-circuiting, fail-safe | **Complete** |
-| Tamper-evident audit ledger + `verify-audit` | **Complete** |
-| Constitution Guard (LLM judge) + provider connector | **Complete** |
-| Context / Action / Secret / Supply-Chain detection logic | **Stubbed — returns allow** |
-| Claude Code adapter, `trustgate init`, `trustgate test` | **Not started** (R2 / F1) |
+| Wire contract (`ActionRequest` / `Decision` / `GuardResult`) | Frozen — additive changes only |
+| Constitution format, parser, compiled matchers | Complete |
+| Engine: precedence, short-circuit, fail-safe | Complete |
+| Action / Context / Secret / Supply-Chain guards | Complete |
+| Constitution Guard (LLM judge) + provider connector | Complete |
+| Tamper-evident audit ledger + `verify-audit` | Complete |
+| Claude Code `PreToolUse` adapter + `trustgate init` | Complete |
+| Red-team suite + `trustgate test`, CI-gated | Complete |
+| Voice adapter | Designed, not built — Part I of the build document |
 
-> **TrustGate does not block anything yet.** The four deterministic guards are
-> structural stubs. The pipeline that runs them, the ledger that records them,
-> and the contract they speak are real and tested; the detection patterns land
-> in R1. Do not deploy this as a control.
+260 tests. The block rate and the false-positive count are both build gates: one
+missed attack or one blocked control fails CI.
+
+> **The honest caveat on that 100%.** The attacks and the defenses were written
+> by the same author, which biases any block rate upward. It means the known
+> attack classes are covered, not that the gate is unbypassable. A red-team pass
+> with payloads written by someone else is the next meaningful test.
 
 ## Why this exists
 
@@ -98,16 +122,47 @@ That is `uv sync --all-extras` plus a macOS workaround (see
 [Troubleshooting](#troubleshooting)). On Linux and Windows, plain
 `uv sync --all-extras` is equivalent.
 
-## Try it
+## Protect a Claude Code project
+
+From the root of the project you want governed:
 
 ```bash
-uv run trustgate validate trustgate/policies/starter.coding.yaml
+trustgate init
+```
+
+That writes three things, backing up anything it touches:
+
+- `trustgate.constitution.yaml` — the starter policy, yours to edit
+- `.claude/hooks/trustgate-pretooluse.sh` — the hook shim
+- a `PreToolUse` entry merged into `.claude/settings.json`
+
+Then record your existing hooks and MCP servers as reviewed:
+
+```bash
+trustgate approve
+```
+
+Start a **new** Claude Code session — hooks are read at session start — and ask
+it to run `cat .env`. It will be refused, with the principle that refused it.
+
+## Try it without installing anything
+
+Run the red-team suite:
+
+```bash
+uv run trustgate test
 ```
 
 Decide on a single action:
 
 ```bash
-echo '{"surface":"coding","action":{"type":"shell","tool":"Bash","raw":"ls -la"}}' | uv run trustgate check
+echo '{"surface":"coding","action":{"type":"shell","tool":"Bash","raw":"cat .env"}}' | uv run trustgate check -c trustgate/policies/starter.coding.yaml
+```
+
+Check a policy file parses:
+
+```bash
+uv run trustgate validate trustgate/policies/starter.coding.yaml
 ```
 
 Verify the audit chain is intact:

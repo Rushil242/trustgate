@@ -131,15 +131,61 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    print(
-        "trustgate init is not implemented yet (milestone R2).\n"
-        "It will detect .claude/, install the PreToolUse hook, and write a "
-        "starter constitution.\n"
-        "For now, copy trustgate/policies/starter.coding.yaml to "
-        "./trustgate.constitution.yaml",
-        file=sys.stderr,
+    """Install the agent hook and a starter constitution into a project."""
+    from trustgate.adapters.coding.install import install, next_steps
+
+    try:
+        result = install(
+            project_root=args.project or Path.cwd(),
+            surface=args.surface,
+            force=args.force,
+        )
+    except (OSError, ValueError, FileNotFoundError) as exc:
+        print(f"init failed: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+    print(next_steps(result))
+    return EXIT_OK
+
+
+def cmd_approve(args: argparse.Namespace) -> int:
+    """Record the current hook/MCP configuration as reviewed."""
+    from trustgate.core.guards.supply_chain import (
+        collect_extension_files,
+        diff_against_manifest,
+        write_manifest,
     )
-    return EXIT_ERROR
+
+    root = Path(args.project) if args.project else Path.cwd()
+    problems = diff_against_manifest(root)
+    digests = collect_extension_files(root)
+
+    if not digests:
+        print(f"no hook, skill, or MCP configuration found under {root}")
+        return EXIT_OK
+
+    if not problems and not args.force:
+        print(f"already approved — {len(digests)} extension file(s) unchanged")
+        return EXIT_OK
+
+    print("These files decide what runs automatically in every future session:")
+    for rel, why in problems:
+        print(f"  {rel}  ({why})")
+    if not problems:
+        for rel in sorted(digests):
+            print(f"  {rel}")
+
+    if not args.yes:
+        # Approving unreviewed executable configuration is exactly the action
+        # this guard exists to slow down, so it is confirmed by default.
+        answer = input("\nApprove these as reviewed? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            print("not approved")
+            return EXIT_DENIED
+
+    path = write_manifest(root, digests)
+    print(f"approved {len(digests)} file(s) — manifest written to {path}")
+    return EXIT_OK
 
 
 def cmd_test(args: argparse.Namespace) -> int:
@@ -240,8 +286,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_validate.set_defaults(func=cmd_validate)
 
     p_init = sub.add_parser("init", help="install the agent hook and a starter constitution")
-    p_init.add_argument("--surface", default="coding")
+    p_init.add_argument("--surface", default="coding", choices=["coding", "voice"])
+    p_init.add_argument("--project", help="project root (default: current directory)")
+    p_init.add_argument(
+        "--force", action="store_true", help="overwrite an existing constitution"
+    )
     p_init.set_defaults(func=cmd_init)
+
+    p_approve = sub.add_parser(
+        "approve", help="record the current hook/MCP configuration as reviewed"
+    )
+    p_approve.add_argument("--project", help="project root (default: current directory)")
+    p_approve.add_argument("-y", "--yes", action="store_true", help="skip confirmation")
+    p_approve.add_argument(
+        "--force", action="store_true", help="rewrite the manifest even if unchanged"
+    )
+    p_approve.set_defaults(func=cmd_approve)
 
     p_test = sub.add_parser("test", help="run the red-team suite and print block rates")
     p_test.add_argument("--payloads", help="path to a payloads JSON file")

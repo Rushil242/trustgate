@@ -30,9 +30,35 @@ jobs:
       - name: Test
         run: uv run pytest -q
 
-      # The engine must be usable with no API key and no network. If this step
-      # needs a secret to pass, the default has regressed.
+      # The engine must be usable with no API key and no network. If either of
+      # these steps needs a secret to pass, the default has regressed.
       - name: Validate starter policies offline
         run: |
           uv run trustgate validate trustgate/policies/starter.coding.yaml
           uv run trustgate validate trustgate/policies/starter.voice.yaml
+
+      # Fails on one missed attack or one blocked control. This is the gate that
+      # stops a refactor from quietly turning enforcement off.
+      - name: Red-team suite
+        run: uv run trustgate test -c trustgate/policies/starter.coding.yaml
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t trustgate:ci .
+
+      - name: Daemon serves /health
+        run: |
+          docker run -d --name tg -p 8000:8000 \
+            -v "$PWD/trustgate/policies/starter.coding.yaml:/policy/trustgate.constitution.yaml:ro" \
+            trustgate:ci
+          for _ in $(seq 1 30); do
+            if curl -fs http://127.0.0.1:8000/health; then exit 0; fi
+            sleep 1
+          done
+          echo "daemon did not become healthy"
+          docker logs tg
+          exit 1
