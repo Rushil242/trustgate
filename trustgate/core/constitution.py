@@ -7,13 +7,11 @@ in the audit line — so the same sentence explains a block to a developer, a
 regulator, and the model.
 
 Spec: Master Build Document v3.0, Part D.
-
-R0 status: schema, loading and validation are complete. Matcher compilation is
-stubbed (see `Principle.matches`) and lands in R1 with the Action Guard.
 """
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -22,6 +20,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from trustgate.core.models import ActionRequest, ActionType, Effect
+from trustgate.core.normalize import extract_paths, path_matches_glob
 
 
 class ConstitutionError(Exception):
@@ -118,6 +117,10 @@ class Principle(BaseModel):
                 f"principle {self.id!r} is {self.enforcement.value} but has no usable "
                 "`match` block, so it could never fire"
             )
+        # Compile eagerly so a malformed regex is a load-time error naming the
+        # principle, not a surprise on the first action that reaches it.
+        if self.match is not None and self.match.any_pattern:
+            self.compiled_patterns()
         return self
 
     @property
@@ -131,12 +134,69 @@ class Principle(BaseModel):
     def matches(self, req: ActionRequest) -> bool:
         """Whether this principle's deterministic trigger fires on `req`.
 
-        R0: stub. Compiled matchers land in R1 alongside the Action Guard, which
-        is where the patterns are exercised and red-teamed. Returning False here
-        means an R0 engine allows everything, which is the intended skeleton
-        behaviour — enforcement is not claimed until R1.
+        Populated fields are ANDed; values within a field are ORed. An empty
+        `match` never fires, and validation rejects it at load time so a rule
+        cannot silently enforce nothing.
         """
+        m = self.match
+        if m is None or m.is_empty():
+            return False
+
+        if m.surface is not None and req.surface not in m.surface:
+            return False
+        if m.action_type is not None and req.action.type not in m.action_type:
+            return False
+        if m.tool is not None and req.action.tool not in m.tool:
+            return False
+        if m.param_gt is not None and not self._param_gt_fires(req):
+            return False
+        if m.any_pattern is not None and not self._pattern_fires(req):
+            return False
+        if m.touches_paths is not None and not self._path_fires(req):
+            return False
+
+        return True
+
+    def _pattern_fires(self, req: ActionRequest) -> bool:
+        haystack = searchable_text(req)
+        return any(rx.search(haystack) for rx in self.compiled_patterns())
+
+    def _path_fires(self, req: ActionRequest) -> bool:
+        paths = extract_paths(
+            req.action.type.value, req.action.tool, req.action.params, req.action.raw
+        )
+        globs = self.match.touches_paths or []
+        return any(path_matches_glob(p, g) for p in paths for g in globs)
+
+    def _param_gt_fires(self, req: ActionRequest) -> bool:
+        """Strictly greater-than: "refunds over $100" leaves exactly $100 allowed.
+
+        A missing or non-numeric parameter does not fire. A threshold rule
+        describes a value that is present and too large; an absent value is the
+        Action Guard's problem, not a numeric bound's.
+        """
+        for key, threshold in (self.match.param_gt or {}).items():
+            value = req.action.params.get(key)
+            if isinstance(value, bool) or not isinstance(value, int | float | str):
+                continue
+            try:
+                if float(value) > threshold:
+                    return True
+            except (TypeError, ValueError):
+                continue
         return False
+
+    def compiled_patterns(self) -> list[re.Pattern[str]]:
+        """Compile once, cache on the instance.
+
+        Every deterministic principle is tested against every action, so
+        recompiling per request would dominate the sub-50ms budget.
+        """
+        cached = self.__dict__.get("_pattern_cache")
+        if cached is None:
+            cached = compile_patterns(self.match.any_pattern or [], self.id)
+            self.__dict__["_pattern_cache"] = cached
+        return cached
 
     def triggers_judge(self, req: ActionRequest) -> bool:
         """Whether the LLM judge should evaluate this principle for `req`.
@@ -232,6 +292,34 @@ class Constitution(BaseModel):
             return cls.model_validate(data)
         except ValidationError as exc:
             raise ConstitutionError(_format_errors(source, data, exc)) from exc
+
+
+def compile_patterns(patterns: list[str], principle_id: str) -> list[re.Pattern[str]]:
+    """Compile a principle's regexes, naming the principle on failure."""
+    compiled: list[re.Pattern[str]] = []
+    for pattern in patterns:
+        try:
+            compiled.append(re.compile(pattern))
+        except re.error as exc:
+            raise ValueError(
+                f"principle {principle_id!r} has an invalid regex {pattern!r}: {exc}"
+            ) from exc
+    return compiled
+
+
+def searchable_text(req: ActionRequest) -> str:
+    """The text a principle's `any_pattern` is tested against.
+
+    Deliberately excludes `context.ingested_content`. Ingested content is
+    untrusted data that the agent happens to have read — a README that documents
+    `rm -rf /` must not block a deploy, and a web page containing "terraform
+    destroy" must not escalate an unrelated action. Scanning that content is the
+    Context Guard's job, and it reports `uncertain` rather than enforcing.
+    """
+    parts = [req.action.raw, req.action.tool]
+    for key, value in (req.action.params or {}).items():
+        parts.append(f"{key}={value}")
+    return "\n".join(p for p in parts if p)
 
 
 def _format_errors(source: str, data: dict[str, Any], exc: ValidationError) -> str:

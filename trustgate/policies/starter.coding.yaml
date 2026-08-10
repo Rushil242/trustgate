@@ -15,11 +15,14 @@ principles:
     statement: "Never run destructive shell commands."
     enforcement: deterministic
     severity: critical
+    # Recursive force deletes are NOT listed here. A bare `rm -rf` pattern also
+    # blocks `rm -rf node_modules`, which is a routine, trivially recoverable
+    # action — and a gate that blocks routine work gets switched off. The Action
+    # Guard judges deletes by target instead, and attributes them to this
+    # principle. See DEVIATIONS.md #13.
     match:
       action_type: [shell]
       any_pattern:
-        - "\\brm\\s+(-[a-zA-Z]*\\s+)*-[a-zA-Z]*[rR][a-zA-Z]*f"
-        - "\\brm\\s+(-[a-zA-Z]*\\s+)*-[a-zA-Z]*f[a-zA-Z]*[rR]"
         - "\\bmkfs(\\.\\w+)?\\b"
         - "\\bdd\\s+.*\\bof=/dev/"
         - ">\\s*/dev/sd[a-z]"
@@ -73,7 +76,9 @@ principles:
     match:
       any_pattern:
         - "\\bterraform\\s+(destroy|apply)\\b"
-        - "\\bkubectl\\b(?=.*\\b(delete|drain|cordon)\\b)"
+        # Anchored to the subcommand position. A lookahead for the bare word
+        # `delete` also fires on `kubectl get pods --selector app=delete-me`.
+        - "\\bkubectl\\s+(?:--?\\S+\\s+)*(delete|drain|cordon)\\b"
         - "\\bkubectl\\b.*--context[=\\s]+\\S*prod"
         - "\\bhelm\\s+(delete|uninstall|rollback)\\b"
         - "\\baws\\s+\\S+\\s+(delete|terminate|remove)-"
@@ -81,6 +86,25 @@ principles:
         - "\\bNODE_ENV=production\\b"
         - "\\b(prod|production)[-_.](database|db|cluster|server)\\b"
     effect: escalate
+
+  # Narrow and unambiguous: dumping the whole environment straight into a
+  # network tool has no legitimate form. The broader judgment call — "is this
+  # POST an ordinary API call or an exfiltration?" — stays with the reasoning
+  # principle below, because a deterministic rule cannot tell those apart
+  # without blocking every legitimate `curl --data`.
+  - id: no-environment-exfiltration
+    statement: >-
+      Never pipe environment variables or credential files directly into a
+      network client.
+    enforcement: deterministic
+    severity: critical
+    match:
+      action_type: [shell, network]
+      any_pattern:
+        - "\\b(env|printenv|set)\\b\\s*\\|\\s*(sudo\\s+)?(curl|wget|nc|netcat|ncat|telnet|ssh)\\b"
+        - "\\b(cat|tail|head)\\b[^|]*\\|\\s*(sudo\\s+)?(nc|netcat|ncat)\\b"
+        - "\\b(curl|wget)\\b[^|]*\\b(--data|--data-binary|--data-raw|-d|--upload-file|-T|-F|--form)\\b\\s*@"
+    effect: block
 
   - id: no-untrusted-hooks
     statement: >-

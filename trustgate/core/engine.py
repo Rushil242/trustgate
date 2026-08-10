@@ -80,9 +80,10 @@ class Engine:
         # fired. Merely *having* reasoning principles in the file is a property
         # of the config, not of the request, and gating on it would put a model
         # call on every tool call. See DEVIATIONS.md #2.
-        if verdict is not Verdict.block and self.judge is not None:
+        if verdict is not Verdict.block:
             in_scope = self.c.principles_needing_judge(req)
-            if needs_judge or in_scope:
+
+            if self.judge is not None and (needs_judge or in_scope):
                 # An uncertain guard means "someone should reason about this",
                 # so fall back to all reasoning principles when no prefilter hit.
                 principles = in_scope or self.c.reasoning_principles
@@ -91,6 +92,24 @@ class Engine:
                 if jr.modifications:
                     modifications.update(jr.modifications)
                 verdict = combine_verdicts(verdict, jr.verdict)
+
+            elif needs_judge:
+                # A guard flagged this as suspicious and there is no judge to
+                # resolve it. Allowing here would mean the answer to "is this
+                # safe?" is "nobody knows", which is the one answer that must
+                # never read as yes. Same rule as a judge that times out.
+                verdict = combine_verdicts(verdict, Verdict.escalate)
+                reasons.append(
+                    Reason(
+                        guard="engine",
+                        rule_id="unresolved-uncertainty",
+                        message=(
+                            "A guard was uncertain and no judge is configured to "
+                            "resolve it; escalating rather than allowing"
+                        ),
+                        severity="medium",
+                    )
+                )
 
         effect = verdict_to_effect(verdict)
         if effect is Effect.escalate:

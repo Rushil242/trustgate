@@ -210,6 +210,19 @@ def verdict_to_effect(verdict: Verdict) -> Effect:
     return _VERDICT_TO_EFFECT[verdict]
 
 
+_EFFECT_TO_VERDICT: dict[Effect, Verdict] = {
+    Effect.allow: Verdict.allow,
+    Effect.block: Verdict.block,
+    Effect.modify: Verdict.modify,
+    Effect.escalate: Verdict.escalate,
+}
+
+
+def effect_to_verdict(effect: Effect) -> Verdict:
+    """Lift a principle's declared effect into a guard verdict."""
+    return _EFFECT_TO_VERDICT[effect]
+
+
 # --------------------------------------------------------------------------
 # Audit
 # --------------------------------------------------------------------------

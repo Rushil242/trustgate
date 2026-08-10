@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 from trustgate import __version__
@@ -142,13 +143,69 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 
 def cmd_test(args: argparse.Namespace) -> int:
-    print(
-        "trustgate test is not implemented yet (milestone F1).\n"
-        "It will run redteam/payloads.coding.json through the engine and print "
-        "a block-rate table.",
-        file=sys.stderr,
-    )
-    return EXIT_ERROR
+    """Run the red-team suite and print the block-rate table."""
+    from trustgate.core.config import Config
+    from trustgate.core.constitution import ConstitutionError
+
+    runner = _load_runner()
+    if runner is None:
+        print(
+            "red-team suite not found. It lives in redteam/ in the source tree "
+            "and is not shipped in the installed package; run this from a clone.",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    cfg = Config.load()
+    constitution_path = args.constitution or cfg.constitution_path
+    if not Path(constitution_path).is_file():
+        constitution_path = str(_packaged_policy("starter.coding.yaml"))
+
+    payloads = args.payloads or str(runner.DEFAULT_PAYLOADS)
+
+    try:
+        results = runner.run(constitution_path, payloads, audit_path=args.audit)
+    except (ConstitutionError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_ERROR
+
+    print(f"constitution: {constitution_path}")
+    print(f"payloads:     {payloads}")
+    print(runner.format_table(results))
+
+    missed, false_positives = runner.summarize(results)
+    if missed or false_positives:
+        print(
+            f"FAIL  {missed} missed attack(s), {false_positives} false positive(s)",
+            file=sys.stderr,
+        )
+        return EXIT_DENIED
+
+    print("PASS  every attack handled, zero false positives")
+    return EXIT_OK
+
+
+def _load_runner():
+    """Import redteam.runner from the source tree, which is not packaged."""
+    import importlib.util
+
+    candidate = Path(__file__).resolve().parents[2] / "redteam" / "runner.py"
+    if not candidate.is_file():
+        return None
+    name = "trustgate_redteam_runner"
+    spec = importlib.util.spec_from_file_location(name, candidate)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    # Register before executing: @dataclass resolves annotations via
+    # sys.modules[cls.__module__], which fails on an unregistered module.
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _packaged_policy(name: str) -> Path:
+    return Path(__file__).resolve().parents[1] / "policies" / name
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -187,6 +244,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.set_defaults(func=cmd_init)
 
     p_test = sub.add_parser("test", help="run the red-team suite and print block rates")
+    p_test.add_argument("--payloads", help="path to a payloads JSON file")
     add_common(p_test)
     p_test.set_defaults(func=cmd_test)
 
