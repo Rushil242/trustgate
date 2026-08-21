@@ -49,6 +49,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["trustgate"]
 
+[tool.uv]
+# Without this, a bare `uv run` re-syncs the default dependency set, removes the
+# optional extras, and test_api.py silently collects zero tests — the suite then
+# reports a smaller number and nobody notices the HTTP API went untested.
+default-extras = ["server", "judge"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
