@@ -246,10 +246,10 @@
         <span class="dot" style="background:var(--warn-dot)"></span>
         Escalated <span class="count" data-count="escalate">–</span>
       </button>
-      <button class="nav-item" data-effect="modify" data-label="Modified">
-        <span class="dot" style="background:var(--info-dot)"></span>
-        Modified <span class="count" data-count="modify">–</span>
-      </button>
+      <!-- No "Modified" view: `modify` only fires when an action carries a
+           literal credential, so for most operators it would sit permanently
+           at zero and read as a dead feature. Modified rows still appear in
+           "All decisions" and render with their own status colour. -->
       <button class="nav-item" data-effect="allow" data-label="Allowed">
         <span class="dot" style="background:var(--ok-dot)"></span>
         Allowed <span class="count" data-count="allow">–</span>
