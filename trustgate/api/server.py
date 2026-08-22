@@ -81,7 +81,58 @@ def build_app(config: Config | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail="engine not initialized")
         return engine.decide(req)
 
+    @app.get("/v1/audit")
+    def audit_entries(limit: int = 200, effect: str | None = None) -> dict:
+        """Recent audit entries, newest first, for the dashboard.
+
+        Read-only and local: the ledger itself is the source of truth. This
+        just paginates it for a browser instead of a human tailing a file.
+        """
+        engine: Engine | None = _state.get("engine")
+        if engine is None or engine.audit is None:
+            raise HTTPException(status_code=503, detail="no audit ledger configured")
+        all_entries = engine.audit.read_all()
+        entries = all_entries
+        if effect:
+            entries = [e for e in entries if e.get("effect") == effect]
+        entries = list(reversed(entries))[: max(1, min(limit, 2000))]
+        return {"entries": entries, "total": len(all_entries)}
+
+    @app.get("/v1/audit/verify")
+    def audit_verify() -> dict:
+        engine: Engine | None = _state.get("engine")
+        if engine is None or engine.audit is None:
+            raise HTTPException(status_code=503, detail="no audit ledger configured")
+        result = engine.audit.verify()
+        return {
+            "ok": result.ok,
+            "entries_checked": result.entries_checked,
+            "broken_seq": result.broken_seq,
+            "detail": result.detail,
+        }
+
+    _mount_dashboard(app)
     return app
+
+
+def _mount_dashboard(app: FastAPI) -> None:
+    """Serve the static dashboard at / if it's present alongside the package.
+
+    Optional by design: the API and CLI work with no dashboard installed, and a
+    minimal deployment (e.g. the Docker image) must not fail to serve decisions
+    just because dashboard/ was not copied in.
+    """
+    from pathlib import Path
+
+    from fastapi.responses import FileResponse
+
+    dashboard_dir = Path(__file__).resolve().parents[2] / "dashboard"
+    if not dashboard_dir.is_dir():
+        return
+
+    @app.get("/")
+    def dashboard_index() -> FileResponse:
+        return FileResponse(dashboard_dir / "index.html")
 
 
 app = build_app() if os.environ.get("TRUSTGATE_AUTOLOAD_APP") else None

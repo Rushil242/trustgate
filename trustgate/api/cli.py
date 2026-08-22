@@ -101,12 +101,20 @@ def cmd_verify_audit(args: argparse.Namespace) -> int:
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
     from trustgate.api.server import serve
     from trustgate.core.config import Config
 
     cfg = Config.load()
     if args.constitution:
         cfg.constitution_path = args.constitution
+
+    dashboard_dir = Path(__file__).resolve().parents[1] / ".." / "dashboard"
+    if dashboard_dir.resolve().is_dir():
+        print(f"dashboard: http://{args.host}:{args.port}/")
+    print(f"decision API: http://{args.host}:{args.port}/v1/decide")
+
     serve(host=args.host, port=args.port, config=cfg)
     return EXIT_OK
 

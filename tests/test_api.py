@@ -84,6 +84,73 @@ def test_decide_writes_to_the_ledger(client, tmp_path):
     assert (tmp_path / "audit.jsonl").read_text().strip()
 
 
+class TestAuditEndpoints:
+    """The dashboard's data source. Read-only: no state changes here."""
+
+    def _decide(self, client, raw):
+        client.post(
+            "/v1/decide",
+            json={"surface": "coding", "action": {"type": "shell", "tool": "Bash", "raw": raw}},
+        )
+
+    def test_empty_ledger_returns_no_entries(self, client):
+        body = client.get("/v1/audit").json()
+        assert body["entries"] == []
+        assert body["total"] == 0
+
+    def test_entries_are_newest_first(self, client):
+        self._decide(client, "ls")
+        self._decide(client, "cat .env")
+        entries = client.get("/v1/audit").json()["entries"]
+        assert [e["seq"] for e in entries] == [1, 0]
+
+    def test_total_ignores_the_limit(self, client):
+        for cmd in ["ls", "pwd", "cat .env"]:
+            self._decide(client, cmd)
+        body = client.get("/v1/audit?limit=1").json()
+        assert len(body["entries"]) == 1
+        assert body["total"] == 3
+
+    def test_filters_by_effect(self, client):
+        self._decide(client, "ls")
+        self._decide(client, "cat .env")
+        blocked = client.get("/v1/audit?effect=block").json()["entries"]
+        assert len(blocked) == 1
+        assert blocked[0]["effect"] == "block"
+
+    def test_verify_reports_an_intact_chain(self, client):
+        self._decide(client, "ls")
+        self._decide(client, "cat .env")
+        body = client.get("/v1/audit/verify").json()
+        assert body["ok"] is True
+        assert body["entries_checked"] == 2
+        assert body["broken_seq"] is None
+
+    def test_verify_detects_tampering(self, client, tmp_path):
+        self._decide(client, "cat .env")
+        ledger_path = tmp_path / "audit.jsonl"
+        entry = json.loads(ledger_path.read_text().strip())
+        entry["effect"] = "allow"
+        ledger_path.write_text(json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n")
+
+        body = client.get("/v1/audit/verify").json()
+        assert body["ok"] is False
+        assert body["broken_seq"] == 0
+
+    def test_secrets_are_redacted_before_they_reach_the_dashboard(self, client):
+        self._decide(client, "export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE")
+        entries = client.get("/v1/audit").json()["entries"]
+        blob = json.dumps(entries)
+        assert "AKIAIOSFODNN7EXAMPLE" not in blob
+
+
+def test_dashboard_is_served_at_root(client):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "TrustGate" in resp.text
+    assert "text/html" in resp.headers["content-type"]
+
+
 def test_server_refuses_to_start_without_a_valid_constitution(tmp_path):
     # A gate that allows everything is worse than an obviously absent gate.
     cfg = Config()

@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>TrustGate — Audit Console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root{
+    --bg:#0b0f16; --panel:#111823; --panel2:#0d1420; --border:#223047;
+    --text:#e6edf3; --dim:#8b9bad; --dim2:#5b6b7d;
+    --blue:#58a6ff; --green:#3fb950; --red:#ff7b72; --amber:#e3b341; --purple:#d2a8ff;
+    --mono:"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:var(--sans)}
+  a{color:var(--blue)}
+  header{
+    display:flex;align-items:center;gap:16px;padding:18px 28px;
+    border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:5;
+  }
+  .brand{font-weight:800;font-size:20px;letter-spacing:-.02em;
+    background:linear-gradient(92deg,#58a6ff,#3fb950);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+  .brand-sub{color:var(--dim);font-size:13px}
+  .spacer{flex:1}
+  .pill{border:1px solid var(--border);border-radius:999px;padding:6px 14px;font-size:13px;color:var(--dim)}
+  .pill.live{border-color:#1f6f3e;color:var(--green)}
+  .pill.live .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:7px;
+    box-shadow:0 0 0 0 rgba(63,185,80,.5);animation:pulse 2s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(63,185,80,.45)}70%{box-shadow:0 0 0 8px rgba(63,185,80,0)}100%{box-shadow:0 0 0 0 rgba(63,185,80,0)}}
+
+  main{max-width:1180px;margin:0 auto;padding:28px}
+  .cards{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:26px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:18px 20px}
+  .card .n{font-size:30px;font-weight:800;letter-spacing:-.02em}
+  .card .l{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin-top:4px}
+  .card.allow .n{color:var(--green)} .card.block .n{color:var(--red)}
+  .card.escalate .n{color:var(--amber)} .card.modify .n{color:var(--purple)}
+
+  .verify{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--border);
+    border-radius:12px;padding:14px 18px;margin-bottom:24px;font-family:var(--mono);font-size:13px}
+  .verify .badge{font-weight:700;padding:3px 10px;border-radius:6px;font-family:var(--sans);font-size:12px}
+  .verify.ok .badge{background:#10281a;color:var(--green)} .verify.ok{border-color:#1f6f3e}
+  .verify.fail .badge{background:#3d1a1a;color:#ff8a80} .verify.fail{border-color:#7d2b28}
+
+  .toolbar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+  .filt{border:1px solid var(--border);background:var(--panel);color:var(--dim);border-radius:999px;
+    padding:8px 16px;font-size:13px;cursor:pointer;font-family:var(--sans)}
+  .filt:hover{color:var(--text)}
+  .filt.active{color:var(--bg);background:var(--blue);border-color:var(--blue);font-weight:600}
+
+  .feed{display:flex;flex-direction:column;gap:8px}
+  .entry{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 18px;
+    display:grid;grid-template-columns:110px minmax(0,1fr) 160px 90px;gap:16px;align-items:center}
+  /* Grid items refuse to shrink below their content's natural size by default,
+     which silently disables text-overflow:ellipsis on long reason strings. */
+  .entry > div{min-width:0}
+  .entry .eff{font-weight:700;font-size:12px;padding:4px 10px;border-radius:6px;text-align:center;text-transform:uppercase;letter-spacing:.04em}
+  .eff.allow{background:#10281a;color:var(--green)} .eff.block{background:#3d1a1a;color:#ff8a80}
+  .eff.escalate{background:#332711;color:var(--amber)} .eff.modify{background:#221733;color:var(--purple)}
+  .action{font-family:var(--mono);font-size:13.5px;color:#c9d6e3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .reason{font-size:12px;color:var(--dim);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .surface{font-size:12px;color:var(--dim2);font-family:var(--mono)}
+  .seq{font-family:var(--mono);font-size:12px;color:var(--dim2);text-align:right}
+
+  .empty{padding:60px 20px;text-align:center;color:var(--dim)}
+  .empty b{color:var(--text)}
+  footer{max-width:1180px;margin:8px auto 40px;padding:0 28px;color:var(--dim2);font-size:12px}
+  code{font-family:var(--mono);background:var(--panel2);padding:1px 6px;border-radius:4px}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="brand">TrustGate</div>
+    <div class="brand-sub">Audit Console</div>
+  </div>
+  <div class="spacer"></div>
+  <span class="pill" id="constitutionPill">loading…</span>
+  <span class="pill live"><span class="dot"></span>polling</span>
+</header>
+
+<main>
+  <div class="cards" id="cards"></div>
+  <div class="verify" id="verify">checking chain…</div>
+
+  <div class="toolbar" id="toolbar">
+    <button class="filt active" data-effect="">All</button>
+    <button class="filt" data-effect="allow">Allow</button>
+    <button class="filt" data-effect="block">Block</button>
+    <button class="filt" data-effect="escalate">Escalate</button>
+    <button class="filt" data-effect="modify">Modify</button>
+  </div>
+
+  <div class="feed" id="feed"><div class="empty">Loading decisions…</div></div>
+</main>
+
+<footer>
+  Reads directly from the hash-chained audit ledger via <code>GET /v1/audit</code>. No data leaves this machine.
+  Source: <a href="https://github.com/Rushil242/trustgate" target="_blank" rel="noopener">github.com/Rushil242/trustgate</a>
+</footer>
+
+<script>
+const API = "";
+let currentFilter = "";
+
+function fmtTime(ts){
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+}
+
+function renderCards(entries){
+  const counts = {allow:0, block:0, escalate:0, modify:0};
+  for(const e of entries) if(e.effect in counts) counts[e.effect]++;
+  const cards = [
+    {k:'allow', label:'Allowed'}, {k:'block', label:'Blocked'},
+    {k:'escalate', label:'Escalated'}, {k:'modify', label:'Modified'},
+    {k:'total', label:'Total decisions', v: entries.length}
+  ];
+  document.getElementById('cards').innerHTML = cards.map(c =>
+    `<div class="card ${c.k}"><div class="n">${c.v ?? counts[c.k]}</div><div class="l">${c.label}</div></div>`
+  ).join('');
+}
+
+function renderVerify(v){
+  const el = document.getElementById('verify');
+  if(v.ok){
+    el.className = 'verify ok';
+    el.innerHTML = `<span class="badge">CHAIN INTACT</span> ${v.entries_checked} entries verified — no entry has been modified since it was written.`;
+  } else {
+    el.className = 'verify fail';
+    el.innerHTML = `<span class="badge">TAMPERED</span> broken at seq ${v.broken_seq}: ${v.detail}`;
+  }
+}
+
+function renderFeed(entries){
+  const feed = document.getElementById('feed');
+  const filtered = currentFilter ? entries.filter(e => e.effect === currentFilter) : entries;
+  if(filtered.length === 0){
+    feed.innerHTML = `<div class="empty">No decisions yet. Run <b>trustgate check</b> or start a Claude Code session with the hook installed.</div>`;
+    return;
+  }
+  feed.innerHTML = filtered.map(e => {
+    const reasons = (e.reasons || []).map(r => `[${r.rule_id}] ${r.message}`).join(' · ');
+    return `<div class="entry">
+      <div class="eff ${e.effect}">${e.effect}</div>
+      <div>
+        <div class="action">${escapeHtml(e.action_redacted || '')}</div>
+        ${reasons ? `<div class="reason">${escapeHtml(reasons)}</div>` : ''}
+      </div>
+      <div class="surface">${escapeHtml(e.surface || '')} · ${fmtTime(e.ts)}</div>
+      <div class="seq">#${e.seq}</div>
+    </div>`;
+  }).join('');
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function tick(){
+  try {
+    const [health, audit, verify] = await Promise.all([
+      fetch(API + '/health').then(r => r.json()),
+      fetch(API + '/v1/audit?limit=300').then(r => r.json()),
+      fetch(API + '/v1/audit/verify').then(r => r.json()),
+    ]);
+    document.getElementById('constitutionPill').textContent =
+      `${health.constitution} · ${health.principles} principles · judge: ${health.judge}`;
+    renderCards(audit.entries);
+    renderFeed(audit.entries);
+    renderVerify(verify);
+  } catch(err) {
+    document.getElementById('feed').innerHTML =
+      `<div class="empty">Can't reach the API. Start it with <b>trustgate serve</b>, then reload this page.</div>`;
+  }
+}
+
+document.getElementById('toolbar').addEventListener('click', (e) => {
+  if(!e.target.matches('.filt')) return;
+  document.querySelectorAll('.filt').forEach(b => b.classList.remove('active'));
+  e.target.classList.add('active');
+  currentFilter = e.target.dataset.effect;
+  tick();
+});
+
+tick();
+setInterval(tick, 3000);
+</script>
+</body>
+</html>

@@ -200,6 +200,21 @@ uv run python -m trustgate.adapters.voice.examples.function_calling_loop
 
 ---
 
+## Audit console
+
+A local, read-only dashboard over the hash-chained ledger — every decision, the rule that fired, and live chain-verification, updating every few seconds.
+
+```bash
+uv run trustgate serve
+# dashboard: http://127.0.0.1:8000/
+```
+
+![TrustGate audit console — live feed of allow/block/escalate/modify decisions with chain verification](docs/img/dashboard.png)
+
+It's a single static HTML file reading `GET /v1/audit` — no build step, no framework, nothing leaves your machine. Approve/deny workflows for pending escalations are a fast-follow; today the console shows you *that* something was escalated and *why*.
+
+---
+
 ## Benchmarks
 
 | | Coding | Voice |
