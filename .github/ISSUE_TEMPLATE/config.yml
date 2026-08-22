@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a bypass (private)
+    url: https://github.com/Rushil242/trustgate/security/advisories/new
+    about: Found an action TrustGate should stop and doesn't? Report it privately, not as a public issue.
+  - name: Questions and ideas
+    url: https://github.com/Rushil242/trustgate/discussions
+    about: Ask anything, or propose a policy pack for your stack.

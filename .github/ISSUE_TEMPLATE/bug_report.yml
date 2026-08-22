@@ -1,0 +1,32 @@
+name: Bug report
+description: Something is broken (not a bypass, not a false positive)
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead?
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      render: shell
+    validations: { required: true }
+  - type: input
+    id: env
+    attributes:
+      label: OS and Python version
+      placeholder: "macOS 15.2, Python 3.12.13"
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes:
+      label: TrustGate version
+      placeholder: "trustgate --version"
+    validations: { required: true }

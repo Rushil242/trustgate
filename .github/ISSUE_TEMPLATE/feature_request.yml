@@ -1,0 +1,23 @@
+name: Feature request
+description: Propose a rule, guard, adapter, or capability
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What agent behaviour are you trying to control?
+      description: Describe the risk, not the implementation.
+    validations: { required: true }
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like TrustGate to do?
+    validations: { required: true }
+  - type: textarea
+    id: falsepos
+    attributes:
+      label: What legitimate work might this wrongly block?
+      description: |
+        Every rule has a false-positive surface. Naming it up front is the most
+        useful part of a proposal — if you are not sure, say so.
+    validations: { required: true }

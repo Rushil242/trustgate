@@ -1,0 +1,35 @@
+name: False positive
+description: TrustGate blocked or escalated something legitimate
+labels: ["false-positive"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        False positives are treated as security bugs here. A gate that blocks
+        routine work gets switched off, and then it protects nothing.
+  - type: textarea
+    id: action
+    attributes:
+      label: What did you try to do?
+      description: The exact command or tool call.
+      render: shell
+    validations: { required: true }
+  - type: textarea
+    id: decision
+    attributes:
+      label: What did TrustGate decide?
+      description: "Output of `trustgate check`, or the hook's message. Include the rule id."
+      render: shell
+    validations: { required: true }
+  - type: textarea
+    id: policy
+    attributes:
+      label: Which policy were you using?
+      description: The shipped starter, or your own? Paste the relevant principle if custom.
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: "trustgate --version"
+    validations: { required: true }
