@@ -1,20 +1,22 @@
 # A security tool running stale dependencies is its own argument against itself.
+#
+# The pip ecosystem is deliberately NOT enabled. Dependency versions here are
+# `>=` floors in pyproject.toml with the real versions pinned in uv.lock, which
+# Dependabot's pip updater does not read. It therefore raises a PR per package
+# to bump a floor that changes nothing about what actually gets installed.
+# Refresh the real versions with `uv lock --upgrade` instead.
+#
+# Actions and the base image are different: those are pinned by tag, so a bump
+# is a genuine change and a genuine security surface.
 version: 2
 updates:
-  - package-ecosystem: "pip"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    groups:
-      python-deps:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "monthly"
+    groups:
+      actions:
+        patterns: ["*"]
 
   - package-ecosystem: "docker"
     directory: "/"
