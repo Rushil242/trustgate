@@ -7,15 +7,23 @@ FROM python:3.12-slim AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-WORKDIR /build
+# Build at the SAME path the runtime image uses. A venv's console scripts
+# hardcode their interpreter in the shebang, so building at /build and copying
+# to /app yields "exec: no such file or directory" at run time — where the
+# missing file is the interpreter, not the script, which makes it a confusing
+# error to chase.
+WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
 # Dependencies first so a source edit does not invalidate the layer.
+# --no-dev keeps pytest and ruff out of the runtime image; --no-editable
+# installs the package properly rather than via a .pth pointing at the source.
 COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --no-install-project --extra server --extra judge
+RUN uv sync --frozen --no-install-project --no-dev --no-editable \
+    --extra server --extra judge
 
 COPY trustgate/ ./trustgate/
-RUN uv sync --frozen --extra server --extra judge
+RUN uv sync --frozen --no-dev --no-editable --extra server --extra judge
 
 
 FROM python:3.12-slim
@@ -24,8 +32,7 @@ FROM python:3.12-slim
 # root itself.
 RUN useradd --create-home --uid 10001 trustgate
 
-COPY --from=builder --chown=trustgate:trustgate /build/.venv /app/.venv
-COPY --from=builder --chown=trustgate:trustgate /build/trustgate /app/trustgate
+COPY --from=builder --chown=trustgate:trustgate /app /app
 
 WORKDIR /app
 USER trustgate

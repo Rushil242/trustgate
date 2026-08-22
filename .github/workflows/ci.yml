@@ -71,3 +71,11 @@ jobs:
           echo "daemon did not become healthy"
           docker logs tg
           exit 1
+
+      - name: Engine decides inside the container
+        run: |
+          echo '{"surface":"coding","action":{"type":"shell","tool":"Bash","raw":"cat .env"}}' \
+            | docker run -i --rm \
+                -v "$PWD/trustgate/policies/starter.coding.yaml:/policy/trustgate.constitution.yaml:ro" \
+                trustgate:ci check \
+            | tee /dev/stderr | grep -q '"effect":"block"'
