@@ -3,7 +3,7 @@
 # Runs `trustgate serve` for adapters that prefer a warm process to a per-call
 # CLI invocation (the voice gateway, or a coding adapter on a busy repo).
 
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
@@ -26,7 +26,7 @@ COPY trustgate/ ./trustgate/
 RUN uv sync --frozen --no-dev --no-editable --extra server --extra judge
 
 
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # The gate decides whether privileged actions may run, so it does not run as
 # root itself.
