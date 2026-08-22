@@ -32,6 +32,15 @@ FROM python:3.12-slim
 # root itself.
 RUN useradd --create-home --uid 10001 trustgate
 
+# Create the audit and policy mount points as root and hand them to the
+# unprivileged user. Docker creates a VOLUME directory owned by root, so
+# without this the container starts, serves /health happily, and then dies with
+# a PermissionError on the first decision it tries to record — the audit log is
+# the one thing it must never fail to write.
+# (A bind mount overrides this with the host's ownership; run such a mount as
+# uid 10001, or use the named volume the VOLUME line declares.)
+RUN mkdir -p /audit /policy && chown trustgate:trustgate /audit
+
 COPY --from=builder --chown=trustgate:trustgate /app /app
 
 WORKDIR /app
