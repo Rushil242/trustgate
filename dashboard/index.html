@@ -1,191 +1,581 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8" />
-<title>TrustGate — Audit Console</title>
+<title>Decisions · TrustGate</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
+  /* ------------------------------------------------------------------
+     Palette. Neutrals carry the interface; colour appears only as a
+     semantic signal at small scale (a 6px dot, a 20px chip). Numbers use
+     tabular figures so columns align down the table.
+     ------------------------------------------------------------------ */
   :root{
-    --bg:#0b0f16; --panel:#111823; --panel2:#0d1420; --border:#223047;
-    --text:#e6edf3; --dim:#8b9bad; --dim2:#5b6b7d;
-    --blue:#58a6ff; --green:#3fb950; --red:#ff7b72; --amber:#e3b341; --purple:#d2a8ff;
-    --mono:"SF Mono",Menlo,Consolas,monospace;
-    --sans:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+    --canvas:#f6f7f9; --surface:#ffffff; --surface-2:#fbfbfc; --surface-3:#f2f3f5;
+    --line:#e4e7ec; --line-strong:#d3d8de;
+    --ink:#15181d; --ink-2:#535a66; --ink-3:#858c98;
+    --accent:#2f5cff; --accent-weak:#eef2ff;
+    --ok:#0f8a54; --ok-bg:#eaf7f0; --ok-dot:#17a866;
+    --danger:#b2311f; --danger-bg:#fdf0ee; --danger-dot:#e0492f;
+    --warn:#9a5b06; --warn-bg:#fdf5e7; --warn-dot:#d68910;
+    --info:#5b3bc4; --info-bg:#f2effc; --info-dot:#8060d8;
+    --shadow:0 1px 2px rgba(16,24,40,.05);
+    --shadow-lg:0 12px 32px -8px rgba(16,24,40,.18),0 0 0 1px rgba(16,24,40,.05);
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,Helvetica,Arial,sans-serif;
+    --sidebar:248px;
   }
+  html[data-theme="dark"]{
+    --canvas:#0e1013; --surface:#15181c; --surface-2:#191d22; --surface-3:#1e232a;
+    --line:#262b32; --line-strong:#333941;
+    --ink:#e7eaee; --ink-2:#9aa2ad; --ink-3:#6e7681;
+    --accent:#6b8dff; --accent-weak:#1b2440;
+    --ok:#4ec98a; --ok-bg:#12251c; --ok-dot:#3fbd7c;
+    --danger:#f08b78; --danger-bg:#2a1714; --danger-dot:#e0604a;
+    --warn:#e0a862; --warn-bg:#2a2013; --warn-dot:#d29a3f;
+    --info:#b09bf0; --info-bg:#201a33; --info-dot:#9277e0;
+    --shadow:0 1px 2px rgba(0,0,0,.3);
+    --shadow-lg:0 12px 32px -8px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.06);
+  }
+
   *{box-sizing:border-box}
-  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:var(--sans)}
-  a{color:var(--blue)}
-  header{
-    display:flex;align-items:center;gap:16px;padding:18px 28px;
-    border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:5;
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--canvas);color:var(--ink);font-family:var(--sans);
+    font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased;
+    font-variant-numeric:tabular-nums;
   }
-  .brand{font-weight:800;font-size:20px;letter-spacing:-.02em;
-    background:linear-gradient(92deg,#58a6ff,#3fb950);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-  .brand-sub{color:var(--dim);font-size:13px}
-  .spacer{flex:1}
-  .pill{border:1px solid var(--border);border-radius:999px;padding:6px 14px;font-size:13px;color:var(--dim)}
-  .pill.live{border-color:#1f6f3e;color:var(--green)}
-  .pill.live .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:7px;
-    box-shadow:0 0 0 0 rgba(63,185,80,.5);animation:pulse 2s infinite}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(63,185,80,.45)}70%{box-shadow:0 0 0 8px rgba(63,185,80,0)}100%{box-shadow:0 0 0 0 rgba(63,185,80,0)}}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+  ::selection{background:var(--accent);color:#fff}
 
-  main{max-width:1180px;margin:0 auto;padding:28px}
-  .cards{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:26px}
-  .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:18px 20px}
-  .card .n{font-size:30px;font-weight:800;letter-spacing:-.02em}
-  .card .l{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin-top:4px}
-  .card.allow .n{color:var(--green)} .card.block .n{color:var(--red)}
-  .card.escalate .n{color:var(--amber)} .card.modify .n{color:var(--purple)}
+  .app{display:grid;grid-template-columns:var(--sidebar) 1fr;height:100vh;overflow:hidden}
 
-  .verify{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--border);
-    border-radius:12px;padding:14px 18px;margin-bottom:24px;font-family:var(--mono);font-size:13px}
-  .verify .badge{font-weight:700;padding:3px 10px;border-radius:6px;font-family:var(--sans);font-size:12px}
-  .verify.ok .badge{background:#10281a;color:var(--green)} .verify.ok{border-color:#1f6f3e}
-  .verify.fail .badge{background:#3d1a1a;color:#ff8a80} .verify.fail{border-color:#7d2b28}
+  /* ---------------------------- sidebar ---------------------------- */
+  .side{
+    background:var(--surface);border-right:1px solid var(--line);
+    display:flex;flex-direction:column;overflow-y:auto;
+  }
+  .brand{display:flex;align-items:center;gap:9px;padding:16px 18px 14px}
+  .mark{
+    width:26px;height:26px;border-radius:6px;background:var(--ink);color:var(--surface);
+    display:grid;place-items:center;font-weight:700;font-size:13px;letter-spacing:-.02em;flex:none;
+  }
+  .brand-name{font-weight:610;font-size:14px;letter-spacing:-.01em;line-height:1.2}
+  .brand-sub{font-size:11px;color:var(--ink-3);line-height:1.2}
 
-  .toolbar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
-  .filt{border:1px solid var(--border);background:var(--panel);color:var(--dim);border-radius:999px;
-    padding:8px 16px;font-size:13px;cursor:pointer;font-family:var(--sans)}
-  .filt:hover{color:var(--text)}
-  .filt.active{color:var(--bg);background:var(--blue);border-color:var(--blue);font-weight:600}
+  .nav{padding:4px 10px 10px}
+  .nav-label{
+    font-size:10.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;
+    color:var(--ink-3);padding:12px 8px 6px;
+  }
+  .nav-item{
+    display:flex;align-items:center;gap:9px;width:100%;text-align:left;
+    padding:6px 8px;border-radius:6px;color:var(--ink-2);font-size:13px;font-weight:500;
+  }
+  .nav-item:hover{background:var(--surface-3);color:var(--ink)}
+  .nav-item[aria-current="true"]{background:var(--surface-3);color:var(--ink);font-weight:600}
+  .nav-item .dot{width:6px;height:6px;border-radius:50%;flex:none}
+  .nav-item .count{margin-left:auto;font-size:11.5px;color:var(--ink-3);font-weight:500}
+  .nav-item[aria-current="true"] .count{color:var(--ink-2)}
 
-  .feed{display:flex;flex-direction:column;gap:8px}
-  .entry{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 18px;
-    display:grid;grid-template-columns:110px minmax(0,1fr) 160px 90px;gap:16px;align-items:center}
-  /* Grid items refuse to shrink below their content's natural size by default,
-     which silently disables text-overflow:ellipsis on long reason strings. */
-  .entry > div{min-width:0}
-  .entry .eff{font-weight:700;font-size:12px;padding:4px 10px;border-radius:6px;text-align:center;text-transform:uppercase;letter-spacing:.04em}
-  .eff.allow{background:#10281a;color:var(--green)} .eff.block{background:#3d1a1a;color:#ff8a80}
-  .eff.escalate{background:#332711;color:var(--amber)} .eff.modify{background:#221733;color:var(--purple)}
-  .action{font-family:var(--mono);font-size:13.5px;color:#c9d6e3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .reason{font-size:12px;color:var(--dim);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .surface{font-size:12px;color:var(--dim2);font-family:var(--mono)}
-  .seq{font-family:var(--mono);font-size:12px;color:var(--dim2);text-align:right}
+  .side-block{padding:10px 18px;border-top:1px solid var(--line);margin-top:auto}
+  .meta-row{display:flex;justify-content:space-between;gap:10px;padding:3px 0;font-size:12px}
+  .meta-row dt{color:var(--ink-3)}
+  .meta-row dd{margin:0;color:var(--ink-2);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-  .empty{padding:60px 20px;text-align:center;color:var(--dim)}
-  .empty b{color:var(--text)}
-  footer{max-width:1180px;margin:8px auto 40px;padding:0 28px;color:var(--dim2);font-size:12px}
-  code{font-family:var(--mono);background:var(--panel2);padding:1px 6px;border-radius:4px}
+  /* ----------------------------- main ------------------------------ */
+  .main{display:flex;flex-direction:column;overflow:hidden}
+  .topbar{
+    display:flex;align-items:center;gap:12px;padding:0 20px;height:52px;
+    border-bottom:1px solid var(--line);background:var(--surface);flex:none;
+  }
+  .title{font-size:14px;font-weight:610;letter-spacing:-.01em}
+  .title .sub{color:var(--ink-3);font-weight:400;margin-left:8px}
+  .grow{flex:1}
+
+  .search{position:relative;width:260px}
+  .search input{
+    width:100%;height:30px;padding:0 10px 0 30px;font:inherit;font-size:12.5px;
+    background:var(--surface-2);border:1px solid var(--line);border-radius:6px;color:var(--ink);
+  }
+  .search input::placeholder{color:var(--ink-3)}
+  .search input:focus{outline:none;border-color:var(--accent);background:var(--surface);
+    box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 14%,transparent)}
+  .search svg{position:absolute;left:9px;top:8px;width:14px;height:14px;color:var(--ink-3)}
+
+  .btn{
+    height:30px;padding:0 11px;border:1px solid var(--line);border-radius:6px;
+    background:var(--surface);color:var(--ink-2);font-size:12.5px;font-weight:500;
+    display:inline-flex;align-items:center;gap:6px;box-shadow:var(--shadow);
+  }
+  .btn:hover{background:var(--surface-3);color:var(--ink)}
+  .btn.icon{width:30px;padding:0;justify-content:center}
+
+  .live{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-3);white-space:nowrap}
+  .live .beacon{width:6px;height:6px;border-radius:50%;background:var(--ok-dot)}
+  .live.paused .beacon{background:var(--ink-3)}
+
+  /* --------------------------- stat strip --------------------------- */
+  .strip{
+    display:flex;align-items:stretch;border-bottom:1px solid var(--line);
+    background:var(--surface);flex:none;
+  }
+  .stat{padding:12px 20px;border-right:1px solid var(--line);min-width:118px}
+  .stat .k{font-size:11px;color:var(--ink-3);font-weight:500;letter-spacing:.02em}
+  .stat .v{font-size:19px;font-weight:600;letter-spacing:-.02em;margin-top:1px;display:flex;align-items:center;gap:7px}
+  .stat .v .dot{width:7px;height:7px;border-radius:50%}
+  .integrity{display:flex;align-items:center;gap:9px;padding:12px 20px;flex:1}
+  .integrity .label{font-size:11px;color:var(--ink-3);font-weight:500}
+  .integrity .val{font-size:12.5px;font-weight:500;display:flex;align-items:center;gap:6px;margin-top:2px}
+  .shield{width:13px;height:13px;flex:none}
+
+  /* ----------------------------- table ------------------------------ */
+  .tablewrap{flex:1;overflow:auto;background:var(--surface)}
+  table{width:100%;border-collapse:separate;border-spacing:0}
+  thead th{
+    position:sticky;top:0;z-index:2;background:var(--surface-2);
+    font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);
+    text-align:left;padding:8px 14px;border-bottom:1px solid var(--line);white-space:nowrap;
+  }
+  tbody td{padding:0 14px;height:40px;border-bottom:1px solid var(--line);vertical-align:middle}
+  tbody tr{cursor:pointer}
+  tbody tr:hover td{background:var(--surface-2)}
+  tbody tr[aria-selected="true"] td{background:var(--accent-weak)}
+
+  .st{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:500;white-space:nowrap}
+  .st .dot{width:6px;height:6px;border-radius:50%;flex:none}
+  .st.allow{color:var(--ok)} .st.allow .dot{background:var(--ok-dot)}
+  .st.block{color:var(--danger)} .st.block .dot{background:var(--danger-dot)}
+  .st.escalate{color:var(--warn)} .st.escalate .dot{background:var(--warn-dot)}
+  .st.modify{color:var(--info)} .st.modify .dot{background:var(--info-dot)}
+
+  td.action{font-family:var(--mono);font-size:12.5px;color:var(--ink);
+    max-width:1px;width:52%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chip{
+    display:inline-block;font-family:var(--mono);font-size:11px;padding:1.5px 6px;
+    border-radius:4px;background:var(--surface-3);color:var(--ink-2);border:1px solid var(--line);
+    max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;
+  }
+  .chip.more{margin-left:4px;color:var(--ink-3)}
+  .muted{color:var(--ink-3)}
+  td.num{text-align:right;font-family:var(--mono);font-size:12px;color:var(--ink-3);width:64px}
+  td.when{color:var(--ink-2);font-size:12.5px;white-space:nowrap;width:96px}
+  td.surface{color:var(--ink-2);font-size:12.5px;width:86px}
+  /* Keep the rule chips on one line: wrapping a "+1" onto a second row grows
+     the row height and breaks the scan-down rhythm. The chip truncates itself,
+     so the cell only needs to refuse to wrap. */
+  td.rule{width:230px;white-space:nowrap}
+
+  .empty{padding:64px 24px;text-align:center}
+  .empty h3{margin:0 0 4px;font-size:14px;font-weight:600}
+  .empty p{margin:0;color:var(--ink-3);font-size:12.5px}
+  .empty code{font-family:var(--mono);background:var(--surface-3);padding:1px 5px;border-radius:4px;font-size:12px}
+
+  .statusbar{
+    display:flex;align-items:center;gap:14px;padding:0 20px;height:32px;flex:none;
+    border-top:1px solid var(--line);background:var(--surface-2);
+    font-size:11.5px;color:var(--ink-3);
+  }
+
+  /* ----------------------------- drawer ----------------------------- */
+  .scrim{position:fixed;inset:0;background:rgba(16,24,40,.28);opacity:0;pointer-events:none;
+    transition:opacity .14s ease;z-index:20}
+  .scrim.open{opacity:1;pointer-events:auto}
+  .drawer{
+    position:fixed;top:0;right:0;bottom:0;width:440px;max-width:92vw;background:var(--surface);
+    border-left:1px solid var(--line);box-shadow:var(--shadow-lg);z-index:21;
+    transform:translateX(100%);transition:transform .16s cubic-bezier(.32,.72,0,1);
+    display:flex;flex-direction:column;
+  }
+  .drawer.open{transform:none}
+  .drawer-head{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line);flex:none}
+  .drawer-head h2{margin:0;font-size:13.5px;font-weight:610;letter-spacing:-.01em}
+  .drawer-body{overflow-y:auto;padding:4px 18px 22px}
+  .sec{padding:14px 0;border-bottom:1px solid var(--line)}
+  .sec:last-child{border-bottom:none}
+  .sec h4{margin:0 0 8px;font-size:10.5px;font-weight:600;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--ink-3)}
+  .kv{display:grid;grid-template-columns:96px 1fr;gap:5px 12px;font-size:12.5px}
+  .kv dt{color:var(--ink-3)}
+  .kv dd{margin:0;color:var(--ink);word-break:break-word}
+  .code{
+    font-family:var(--mono);font-size:12px;background:var(--surface-3);border:1px solid var(--line);
+    border-radius:6px;padding:9px 11px;white-space:pre-wrap;word-break:break-all;color:var(--ink);
+  }
+  .reason{border:1px solid var(--line);border-radius:6px;padding:9px 11px;margin-bottom:7px;background:var(--surface-2)}
+  .reason:last-child{margin-bottom:0}
+  .reason-top{display:flex;align-items:center;gap:7px;margin-bottom:3px}
+  .sev{font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+    padding:1px 5px;border-radius:3px;background:var(--surface-3);color:var(--ink-2);border:1px solid var(--line)}
+  .sev.critical{background:var(--danger-bg);color:var(--danger);border-color:transparent}
+  .sev.high{background:var(--warn-bg);color:var(--warn);border-color:transparent}
+  .reason p{margin:0;font-size:12.5px;color:var(--ink-2);line-height:1.5}
+  .hash{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);word-break:break-all}
+
+  @media (max-width:900px){
+    .app{grid-template-columns:1fr}
+    .side{display:none}
+    .search{width:150px}
+  }
 </style>
 </head>
 <body>
-<header>
-  <div>
-    <div class="brand">TrustGate</div>
-    <div class="brand-sub">Audit Console</div>
+<div class="app">
+
+  <aside class="side">
+    <div class="brand">
+      <div class="mark">T</div>
+      <div>
+        <div class="brand-name">TrustGate</div>
+        <div class="brand-sub">Audit Console</div>
+      </div>
+    </div>
+
+    <nav class="nav" id="nav">
+      <div class="nav-label">Views</div>
+      <button class="nav-item" data-effect="" data-label="All" aria-current="true">
+        All decisions <span class="count" data-count="total">–</span>
+      </button>
+      <button class="nav-item" data-effect="block" data-label="Blocked">
+        <span class="dot" style="background:var(--danger-dot)"></span>
+        Blocked <span class="count" data-count="block">–</span>
+      </button>
+      <button class="nav-item" data-effect="escalate" data-label="Escalated">
+        <span class="dot" style="background:var(--warn-dot)"></span>
+        Escalated <span class="count" data-count="escalate">–</span>
+      </button>
+      <button class="nav-item" data-effect="modify" data-label="Modified">
+        <span class="dot" style="background:var(--info-dot)"></span>
+        Modified <span class="count" data-count="modify">–</span>
+      </button>
+      <button class="nav-item" data-effect="allow" data-label="Allowed">
+        <span class="dot" style="background:var(--ok-dot)"></span>
+        Allowed <span class="count" data-count="allow">–</span>
+      </button>
+    </nav>
+
+    <div class="side-block">
+      <div class="nav-label" style="padding-left:0">Active policy</div>
+      <dl style="margin:0">
+        <div class="meta-row"><dt>Constitution</dt><dd id="mConst" title="">–</dd></div>
+        <div class="meta-row"><dt>Principles</dt><dd id="mPrin">–</dd></div>
+        <div class="meta-row"><dt>Deterministic</dt><dd id="mDet">–</dd></div>
+        <div class="meta-row"><dt>Reasoning</dt><dd id="mReas">–</dd></div>
+        <div class="meta-row"><dt>Judge</dt><dd id="mJudge">–</dd></div>
+      </dl>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="title">Decisions <span class="sub" id="viewName">All</span></div>
+      <div class="grow"></div>
+      <div class="search">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+          <circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14" stroke-linecap="round"/>
+        </svg>
+        <input id="q" type="search" placeholder="Filter by action or rule…" autocomplete="off" spellcheck="false" />
+      </div>
+      <span class="live" id="live"><span class="beacon"></span><span id="liveText">Live</span></span>
+      <button class="btn icon" id="pause" title="Pause auto-refresh" aria-label="Pause auto-refresh">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2.5" y="2" width="2.5" height="8" rx=".7"/><rect x="7" y="2" width="2.5" height="8" rx=".7"/></svg>
+      </button>
+      <button class="btn icon" id="theme" title="Toggle theme" aria-label="Toggle theme">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M13.5 9.2A5.8 5.8 0 016.8 2.5 5.8 5.8 0 108.5 13.8c2.2 0 4.1-1.2 5-3.1z" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="strip">
+      <div class="stat"><div class="k">Total</div><div class="v" id="sTotal">–</div></div>
+      <div class="stat"><div class="k">Blocked</div><div class="v"><span class="dot" style="background:var(--danger-dot)"></span><span id="sBlock">–</span></div></div>
+      <div class="stat"><div class="k">Escalated</div><div class="v"><span class="dot" style="background:var(--warn-dot)"></span><span id="sEsc">–</span></div></div>
+      <div class="stat"><div class="k">Allowed</div><div class="v"><span class="dot" style="background:var(--ok-dot)"></span><span id="sAllow">–</span></div></div>
+      <div class="integrity">
+        <div>
+          <div class="label">Ledger integrity</div>
+          <div class="val" id="integrity"><span class="muted">checking…</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:118px">Decision</th>
+            <th>Action</th>
+            <th class="rule">Rule</th>
+            <th style="width:86px">Surface</th>
+            <th style="width:96px">Time</th>
+            <th style="width:64px;text-align:right">Seq</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div id="emptyState"></div>
+    </div>
+
+    <div class="statusbar">
+      <span id="showing">–</span>
+      <span class="grow"></span>
+      <span id="updated">–</span>
+      <span>·</span>
+      <a href="https://github.com/Rushil242/trustgate" target="_blank" rel="noopener">Docs</a>
+    </div>
+  </main>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-label="Decision detail">
+  <div class="drawer-head">
+    <h2 id="dTitle">Decision</h2>
+    <div class="grow"></div>
+    <button class="btn icon" id="closeDrawer" aria-label="Close">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 3l6 6M9 3l-6 6"/></svg>
+    </button>
   </div>
-  <div class="spacer"></div>
-  <span class="pill" id="constitutionPill">loading…</span>
-  <span class="pill live"><span class="dot"></span>polling</span>
-</header>
-
-<main>
-  <div class="cards" id="cards"></div>
-  <div class="verify" id="verify">checking chain…</div>
-
-  <div class="toolbar" id="toolbar">
-    <button class="filt active" data-effect="">All</button>
-    <button class="filt" data-effect="allow">Allow</button>
-    <button class="filt" data-effect="block">Block</button>
-    <button class="filt" data-effect="escalate">Escalate</button>
-    <button class="filt" data-effect="modify">Modify</button>
-  </div>
-
-  <div class="feed" id="feed"><div class="empty">Loading decisions…</div></div>
-</main>
-
-<footer>
-  Reads directly from the hash-chained audit ledger via <code>GET /v1/audit</code>. No data leaves this machine.
-  Source: <a href="https://github.com/Rushil242/trustgate" target="_blank" rel="noopener">github.com/Rushil242/trustgate</a>
-</footer>
+  <div class="drawer-body" id="dBody"></div>
+</aside>
 
 <script>
-const API = "";
-let currentFilter = "";
+(() => {
+  "use strict";
 
-function fmtTime(ts){
-  const d = new Date(ts * 1000);
-  return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-}
+  const POLL_MS = 4000;
+  const state = { entries: [], effect: "", query: "", selected: null, live: true, health: null };
 
-function renderCards(entries){
-  const counts = {allow:0, block:0, escalate:0, modify:0};
-  for(const e of entries) if(e.effect in counts) counts[e.effect]++;
-  const cards = [
-    {k:'allow', label:'Allowed'}, {k:'block', label:'Blocked'},
-    {k:'escalate', label:'Escalated'}, {k:'modify', label:'Modified'},
-    {k:'total', label:'Total decisions', v: entries.length}
-  ];
-  document.getElementById('cards').innerHTML = cards.map(c =>
-    `<div class="card ${c.k}"><div class="n">${c.v ?? counts[c.k]}</div><div class="l">${c.label}</div></div>`
-  ).join('');
-}
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-function renderVerify(v){
-  const el = document.getElementById('verify');
-  if(v.ok){
-    el.className = 'verify ok';
-    el.innerHTML = `<span class="badge">CHAIN INTACT</span> ${v.entries_checked} entries verified — no entry has been modified since it was written.`;
-  } else {
-    el.className = 'verify fail';
-    el.innerHTML = `<span class="badge">TAMPERED</span> broken at seq ${v.broken_seq}: ${v.detail}`;
+  /* Relative time reads faster than a clock when you are scanning a feed for
+     "what just happened"; the absolute timestamp stays in the row title and
+     the detail drawer. */
+  function ago(ts) {
+    const s = Math.max(0, (Date.now() - ts * 1000) / 1000);
+    if (s < 45) return "just now";
+    if (s < 3600) return Math.round(s / 60) + "m ago";
+    if (s < 86400) return Math.round(s / 3600) + "h ago";
+    return Math.round(s / 86400) + "d ago";
   }
-}
+  const absTime = (ts) => new Date(ts * 1000).toLocaleString();
 
-function renderFeed(entries){
-  const feed = document.getElementById('feed');
-  const filtered = currentFilter ? entries.filter(e => e.effect === currentFilter) : entries;
-  if(filtered.length === 0){
-    feed.innerHTML = `<div class="empty">No decisions yet. Run <b>trustgate check</b> or start a Claude Code session with the hook installed.</div>`;
-    return;
+  function visible() {
+    const q = state.query.trim().toLowerCase();
+    return state.entries.filter((e) => {
+      if (state.effect && e.effect !== state.effect) return false;
+      if (!q) return true;
+      const hay = (e.action_redacted || "") + " " +
+        (e.reasons || []).map((r) => r.rule_id + " " + r.message).join(" ");
+      return hay.toLowerCase().includes(q);
+    });
   }
-  feed.innerHTML = filtered.map(e => {
-    const reasons = (e.reasons || []).map(r => `[${r.rule_id}] ${r.message}`).join(' · ');
-    return `<div class="entry">
-      <div class="eff ${e.effect}">${e.effect}</div>
-      <div>
-        <div class="action">${escapeHtml(e.action_redacted || '')}</div>
-        ${reasons ? `<div class="reason">${escapeHtml(reasons)}</div>` : ''}
+
+  function renderCounts() {
+    const c = { allow: 0, block: 0, escalate: 0, modify: 0 };
+    for (const e of state.entries) if (e.effect in c) c[e.effect]++;
+    const set = (sel, v) => document.querySelectorAll(sel).forEach((n) => (n.textContent = v));
+    set('[data-count="total"]', state.entries.length);
+    for (const k of Object.keys(c)) set(`[data-count="${k}"]`, c[k]);
+    $("sTotal").textContent = state.entries.length;
+    $("sBlock").textContent = c.block;
+    $("sEsc").textContent = c.escalate;
+    $("sAllow").textContent = c.allow;
+  }
+
+  function renderRows() {
+    const list = visible();
+    const tbody = $("rows");
+    const empty = $("emptyState");
+
+    if (!list.length) {
+      tbody.innerHTML = "";
+      empty.innerHTML = state.entries.length
+        ? `<div class="empty"><h3>No matching decisions</h3><p>Nothing here matches the current view or filter.</p></div>`
+        : `<div class="empty"><h3>No decisions recorded yet</h3>
+             <p>Run <code>trustgate check</code>, or start a Claude Code session with the hook installed.</p></div>`;
+      return;
+    }
+    empty.innerHTML = "";
+
+    tbody.innerHTML = list.map((e) => {
+      const rs = e.reasons || [];
+      const rule = rs.length
+        ? `<span class="chip" title="${esc(rs[0].message)}">${esc(rs[0].rule_id)}</span>` +
+          (rs.length > 1 ? `<span class="chip more">+${rs.length - 1}</span>` : "")
+        : `<span class="muted">—</span>`;
+      return `<tr data-seq="${e.seq}" ${state.selected === e.seq ? 'aria-selected="true"' : ""}>
+        <td><span class="st ${esc(e.effect)}"><span class="dot"></span>${esc(e.effect)}</span></td>
+        <td class="action" title="${esc(e.action_redacted)}">${esc(e.action_redacted)}</td>
+        <td class="rule">${rule}</td>
+        <td class="surface">${esc(e.surface)}</td>
+        <td class="when" title="${esc(absTime(e.ts))}">${ago(e.ts)}</td>
+        <td class="num">${e.seq}</td>
+      </tr>`;
+    }).join("");
+
+    $("showing").textContent =
+      `Showing ${list.length} of ${state.entries.length} decision${state.entries.length === 1 ? "" : "s"}`;
+  }
+
+  function renderIntegrity(v) {
+    const el = $("integrity");
+    if (v.ok) {
+      el.innerHTML = `<svg class="shield" viewBox="0 0 16 16" fill="none" stroke="var(--ok)" stroke-width="1.6" stroke-linejoin="round">
+          <path d="M8 1.6l5 1.9v4.1c0 3.1-2.1 5.6-5 6.8-2.9-1.2-5-3.7-5-6.8V3.5l5-1.9z"/>
+          <path d="M5.8 8.1l1.5 1.5 3-3.2" stroke-linecap="round"/></svg>
+        <span style="color:var(--ok)">Chain intact</span>
+        <span class="muted">· ${v.entries_checked} entries verified</span>`;
+    } else {
+      el.innerHTML = `<svg class="shield" viewBox="0 0 16 16" fill="none" stroke="var(--danger)" stroke-width="1.6" stroke-linejoin="round">
+          <path d="M8 1.6l5 1.9v4.1c0 3.1-2.1 5.6-5 6.8-2.9-1.2-5-3.7-5-6.8V3.5l5-1.9z"/>
+          <path d="M8 5.4v3.1M8 10.6v.1" stroke-linecap="round"/></svg>
+        <span style="color:var(--danger)">Tampered at seq ${v.broken_seq}</span>
+        <span class="muted">· ${esc(v.detail)}</span>`;
+    }
+  }
+
+  function renderHealth(h) {
+    state.health = h;
+    $("mConst").textContent = h.constitution;
+    $("mConst").title = h.constitution;
+    $("mPrin").textContent = h.principles;
+    $("mDet").textContent = h.deterministic;
+    $("mReas").textContent = h.reasoning;
+    $("mJudge").textContent = h.judge;
+  }
+
+  function openDrawer(seq) {
+    const e = state.entries.find((x) => x.seq === seq);
+    if (!e) return;
+    state.selected = seq;
+
+    const reasons = (e.reasons || []).length
+      ? e.reasons.map((r) => `<div class="reason">
+          <div class="reason-top">
+            <span class="chip">${esc(r.rule_id)}</span>
+            <span class="sev ${esc(r.severity || "")}">${esc(r.severity || "n/a")}</span>
+          </div><p>${esc(r.message)}</p></div>`).join("")
+      : `<p class="muted" style="margin:0;font-size:12.5px">No rule fired. Allowed by default.</p>`;
+
+    $("dTitle").innerHTML =
+      `<span class="st ${esc(e.effect)}"><span class="dot"></span>${esc(e.effect)}</span>
+       <span class="muted" style="font-family:var(--mono);font-weight:400;margin-left:8px">#${e.seq}</span>`;
+
+    $("dBody").innerHTML = `
+      <div class="sec">
+        <h4>Action</h4>
+        <div class="code">${esc(e.action_redacted)}</div>
       </div>
-      <div class="surface">${escapeHtml(e.surface || '')} · ${fmtTime(e.ts)}</div>
-      <div class="seq">#${e.seq}</div>
-    </div>`;
-  }).join('');
-}
+      <div class="sec">
+        <h4>Context</h4>
+        <dl class="kv">
+          <dt>Surface</dt><dd>${esc(e.surface)}</dd>
+          <dt>Principal</dt><dd>${esc((e.principal && e.principal.id) || "—")}</dd>
+          <dt>Roles</dt><dd>${esc(((e.principal && e.principal.roles) || []).join(", ") || "—")}</dd>
+          <dt>Timestamp</dt><dd>${esc(absTime(e.ts))}</dd>
+          <dt>Request ID</dt><dd class="hash">${esc(e.request_id)}</dd>
+        </dl>
+      </div>
+      <div class="sec">
+        <h4>Reasons</h4>
+        ${reasons}
+      </div>
+      <div class="sec">
+        <h4>Integrity</h4>
+        <dl class="kv">
+          <dt>Sequence</dt><dd>${e.seq}</dd>
+          <dt>Prev hash</dt><dd class="hash">${esc(e.prev_hash || "genesis")}</dd>
+          <dt>Entry hash</dt><dd class="hash">${esc(e.entry_hash)}</dd>
+        </dl>
+      </div>`;
 
-function escapeHtml(s){
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-async function tick(){
-  try {
-    const [health, audit, verify] = await Promise.all([
-      fetch(API + '/health').then(r => r.json()),
-      fetch(API + '/v1/audit?limit=300').then(r => r.json()),
-      fetch(API + '/v1/audit/verify').then(r => r.json()),
-    ]);
-    document.getElementById('constitutionPill').textContent =
-      `${health.constitution} · ${health.principles} principles · judge: ${health.judge}`;
-    renderCards(audit.entries);
-    renderFeed(audit.entries);
-    renderVerify(verify);
-  } catch(err) {
-    document.getElementById('feed').innerHTML =
-      `<div class="empty">Can't reach the API. Start it with <b>trustgate serve</b>, then reload this page.</div>`;
+    $("drawer").classList.add("open");
+    $("scrim").classList.add("open");
+    renderRows();
   }
-}
 
-document.getElementById('toolbar').addEventListener('click', (e) => {
-  if(!e.target.matches('.filt')) return;
-  document.querySelectorAll('.filt').forEach(b => b.classList.remove('active'));
-  e.target.classList.add('active');
-  currentFilter = e.target.dataset.effect;
-  tick();
-});
+  function closeDrawer() {
+    state.selected = null;
+    $("drawer").classList.remove("open");
+    $("scrim").classList.remove("open");
+    renderRows();
+  }
 
-tick();
-setInterval(tick, 3000);
+  async function poll() {
+    try {
+      const [h, a, v] = await Promise.all([
+        fetch("/health").then((r) => r.json()),
+        fetch("/v1/audit?limit=500").then((r) => r.json()),
+        fetch("/v1/audit/verify").then((r) => r.json()),
+      ]);
+      state.entries = a.entries || [];
+      renderHealth(h);
+      renderCounts();
+      renderRows();
+      renderIntegrity(v);
+      $("updated").textContent = "Updated " + new Date().toLocaleTimeString();
+    } catch (err) {
+      $("emptyState").innerHTML =
+        `<div class="empty"><h3>Cannot reach the Decision API</h3>
+          <p>Start it with <code>trustgate serve</code>, then reload.</p></div>`;
+      $("rows").innerHTML = "";
+    }
+  }
+
+  /* ------------------------------ events ------------------------------ */
+  $("nav").addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".nav-item");
+    if (!btn) return;
+    document.querySelectorAll(".nav-item").forEach((b) => b.setAttribute("aria-current", "false"));
+    btn.setAttribute("aria-current", "true");
+    state.effect = btn.dataset.effect;
+    $("viewName").textContent = btn.dataset.label;
+    renderRows();
+  });
+
+  $("q").addEventListener("input", (ev) => { state.query = ev.target.value; renderRows(); });
+
+  $("rows").addEventListener("click", (ev) => {
+    const tr = ev.target.closest("tr");
+    if (tr) openDrawer(Number(tr.dataset.seq));
+  });
+
+  $("closeDrawer").addEventListener("click", closeDrawer);
+  $("scrim").addEventListener("click", closeDrawer);
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") closeDrawer();
+    if (ev.key === "/" && document.activeElement !== $("q")) { ev.preventDefault(); $("q").focus(); }
+  });
+
+  let timer = setInterval(poll, POLL_MS);
+  $("pause").addEventListener("click", () => {
+    state.live = !state.live;
+    clearInterval(timer);
+    if (state.live) { timer = setInterval(poll, POLL_MS); poll(); }
+    $("live").classList.toggle("paused", !state.live);
+    $("liveText").textContent = state.live ? "Live" : "Paused";
+    $("pause").title = state.live ? "Pause auto-refresh" : "Resume auto-refresh";
+  });
+
+  const applyTheme = (t) => {
+    document.documentElement.dataset.theme = t;
+    try { localStorage.setItem("tg-theme", t); } catch (_) {}
+  };
+  try {
+    const saved = localStorage.getItem("tg-theme");
+    if (saved) applyTheme(saved);
+    else if (matchMedia("(prefers-color-scheme: dark)").matches) applyTheme("dark");
+  } catch (_) {}
+  $("theme").addEventListener("click", () =>
+    applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
+
+  poll();
+})();
 </script>
 </body>
 </html>
