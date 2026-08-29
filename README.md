@@ -4,6 +4,7 @@
 
 ### Your AI agent has a shell, your prod database, and your payment API.<br>TrustGate decides what it's actually allowed to do.
 
+[![Live demo](https://img.shields.io/badge/live%20demo-trustgate.rushil--cv26.workers.dev-16181c)](https://trustgate.rushil-cv26.workers.dev)
 [![CI](https://github.com/Rushil242/trustgate/actions/workflows/ci.yml/badge.svg)](https://github.com/Rushil242/trustgate/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
@@ -14,7 +15,10 @@
 **Deterministic policy enforcement + a tamper-evident audit log for AI agents.**<br>
 Works with Claude Code today. Same engine governs voice agents.
 
-[Quick start](#quick-start) · [How it works](#how-it-works) · [Benchmarks](#benchmarks) · [Threat model](docs/THREAT_MODEL.md) · [Limitations](#what-this-does-not-do)
+**[See an attack get stopped, live &rarr;](https://trustgate.rushil-cv26.workers.dev)**<br>
+<sub>A support agent, a prompt injection, and the same call run twice: once with a gate in front of the tool, once without.</sub>
+
+[Live demo](https://trustgate.rushil-cv26.workers.dev) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Benchmarks](#benchmarks) · [Threat model](docs/THREAT_MODEL.md) · [Limitations](#what-this-does-not-do)
 
 </div>
 
