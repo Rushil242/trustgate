@@ -22,11 +22,20 @@ import hashlib
 import json
 import os
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from trustgate.core.guards.secret import redact
-from trustgate.core.models import ActionRequest, AuditEntry, Decision
+from trustgate.core.models import (
+    ActionRequest,
+    Approver,
+    AuditEntry,
+    Decision,
+    Effect,
+    Outcome,
+    ResolutionEntry,
+)
 
 GENESIS_HASH = ""
 
@@ -72,7 +81,9 @@ class AuditLedger:
 
             body = {
                 "seq": seq,
+                "kind": "decision",
                 "request_id": req.request_id,
+                "correlation_id": req.context.correlation_id or "",
                 "ts": req.timestamp,
                 "surface": req.surface,
                 "principal": req.principal.model_dump(),
@@ -88,6 +99,44 @@ class AuditLedger:
             self._next_seq = seq + 1
 
             return AuditEntry.model_validate(body)
+
+    def write_resolution(
+        self,
+        request_id: str,
+        outcome: Outcome,
+        approver: Approver,
+        correlation_id: str = "",
+        detail: str = "",
+    ) -> ResolutionEntry:
+        """Append the answer to an earlier escalation.
+
+        Deliberately does not check that the escalation exists. The ledger
+        records what happened; refusing to write an answer because the question
+        is missing would lose the more interesting of the two facts. Callers
+        that need the pairing use `open_escalations`.
+        """
+        with self._lock:
+            prev_hash, seq = self._tail()
+
+            body = {
+                "seq": seq,
+                "kind": "resolution",
+                "request_id": request_id,
+                "correlation_id": correlation_id,
+                "ts": time.time(),
+                "outcome": outcome.value,
+                "approver": approver.model_dump(),
+                # Denial reasons are surface text and can quote the command.
+                "detail": redact(detail),
+                "prev_hash": prev_hash,
+            }
+            body["entry_hash"] = compute_hash(body, prev_hash)
+
+            self._append_line(body)
+            self._last_hash = body["entry_hash"]
+            self._next_seq = seq + 1
+
+            return ResolutionEntry.model_validate(body)
 
     def _tail(self) -> tuple[str, int]:
         """Previous hash and next sequence number, read from disk once."""
@@ -133,6 +182,40 @@ class AuditLedger:
                 if line:
                     entries.append(json.loads(line))
         return entries
+
+    def open_escalations(self) -> list[dict]:
+        """Escalated decisions that no resolution has answered yet.
+
+        This is the queue a human is supposed to be working through, and the
+        list an evidence pack has to disclose rather than quietly omit. An
+        escalation nobody ever answered is a real compliance finding: the system
+        asked for a decision and did not get one.
+        """
+        answered: set[str] = set()
+        escalations: list[dict] = []
+
+        for entry in self.read_all():
+            if entry.get("kind") == "resolution":
+                answered.add(entry.get("request_id", ""))
+            elif entry.get("effect") == Effect.escalate.value:
+                escalations.append(entry)
+
+        return [e for e in escalations if e.get("request_id") not in answered]
+
+    def find_open_escalation(self, correlation_id: str) -> dict | None:
+        """The unanswered escalation matching a surface-native id, if any.
+
+        Adapters observing a later event know the surface's own id, never our
+        `request_id`, so this is how an answer finds its question. Returns the
+        most recent match: a correlation id can legitimately repeat across
+        sessions, and the newest open one is the only one still waiting.
+        """
+        if not correlation_id:
+            return None
+        matches = [
+            e for e in self.open_escalations() if e.get("correlation_id") == correlation_id
+        ]
+        return matches[-1] if matches else None
 
     def verify(self) -> VerifyResult:
         """Recompute the chain and report the first broken link.

@@ -215,7 +215,18 @@ uv run trustgate serve
 
 ![TrustGate audit console — live feed of allow/block/escalate/modify decisions with chain verification](docs/img/dashboard.png)
 
-It's a single static HTML file reading `GET /v1/audit` — no build step, no framework, nothing leaves your machine. Approve/deny workflows for pending escalations are a fast-follow; today the console shows you *that* something was escalated and *why*.
+It's a single static HTML file reading `GET /v1/audit` — no build step, no framework, nothing leaves your machine. The console shows you *that* something was escalated and *why*; a browser-based approve/deny queue is a fast-follow.
+
+Escalations do record how they ended. TrustGate watches Claude Code's `PostToolUse`, `PostToolUseFailure` and `PermissionDenied` events and appends a `resolution` entry into the same hash chain, so the log carries the answer as well as the question:
+
+```bash
+trustgate pending
+# 1 escalation(s) awaiting a decision
+#   seq 41       2m ago  [prod-changes-need-approval]
+#       terraform destroy
+```
+
+Because TrustGate observes that prompt rather than owning it, the answer is sometimes genuinely unclear — Claude Code reports a user's refusal and an ordinary command failure through the same event. An outcome we cannot establish is recorded as `unknown`, never as `approved`. Recording an approval that nobody gave is worse than recording nothing.
 
 ---
 

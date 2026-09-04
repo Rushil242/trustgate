@@ -7,6 +7,38 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Escalations now record their answer.** The ledger previously held the
+  question ("a human must decide this") and never the outcome, so it could not
+  answer the thing an auditor actually asks. A new `resolution` entry is
+  appended into the same hash chain carrying the outcome, who answered, and how
+  that was established.
+- **Resolution hook for Claude Code** — registered by `trustgate init` on
+  `PostToolUse`, `PostToolUseFailure` and `PermissionDenied`, matched to the
+  original decision by `tool_use_id`. Writes nothing for actions that were never
+  escalated. Never blocks and always exits 0.
+- **`trustgate pending`** — lists escalations nobody answered, and exits
+  non-zero when any are open. An unanswered escalation is a finding: the system
+  asked for a decision and did not get one.
+- `Context.correlation_id` carries the surface's own id for an action, so a
+  later event can be matched back to the decision that escalated it.
+
+### Notable design decisions
+
+- **An unclassifiable answer is recorded as `unknown`, never as `approved`.**
+  We observe the human's answer through Claude Code's events rather than owning
+  the prompt, and `PostToolUseFailure` does not distinguish a refusal from an
+  ordinary error. A wrong `unknown` costs an auditor one question; a wrong
+  `approved` puts a person's name against a decision they never made.
+- **Denial phrases must name the user.** An end-to-end run caught
+  `EACCES: permission denied` being filed as a human refusal, because
+  "permission denied" is the POSIX error string. Any phrase an operating system
+  can emit on its own is excluded by rule.
+- **Approver `method` is recorded next to the outcome.** "the tool subsequently
+  ran, so permission was granted" is weaker evidence than "a named person
+  clicked approve", and an auditor is entitled to see which one they have.
+
 ## [0.1.0] — first public release
 
 The first version where TrustGate actually enforces policy end to end.

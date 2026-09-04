@@ -26,10 +26,21 @@ from pathlib import Path
 
 CONSTITUTION_FILENAME = "trustgate.constitution.yaml"
 HOOK_RELATIVE_PATH = ".claude/hooks/trustgate-pretooluse.sh"
+RESOLUTION_HOOK_RELATIVE_PATH = ".claude/hooks/trustgate-resolution.sh"
 SETTINGS_RELATIVE_PATH = ".claude/settings.json"
 
-# Marks our entry so re-running init updates it instead of adding a duplicate.
+# Marks our entries so re-running init updates them instead of adding duplicates.
 HOOK_MARKER = "trustgate-pretooluse"
+RESOLUTION_HOOK_MARKER = "trustgate-resolution"
+
+# The events that tell us how an escalation was answered. Registered together
+# because any one of them alone leaves a gap: PostToolUse never sees a refusal,
+# and the failure events never see a success.
+RESOLUTION_EVENTS: tuple[str, ...] = (
+    "PostToolUse",
+    "PostToolUseFailure",
+    "PermissionDenied",
+)
 
 HOOK_SCRIPT = """#!/usr/bin/env bash
 # TrustGate PreToolUse hook. Installed by `trustgate init`.
@@ -47,6 +58,23 @@ if [ ! -x "$TRUSTGATE_PYTHON" ]; then
 fi
 
 exec "$TRUSTGATE_PYTHON" -m trustgate.adapters.coding.claude_code_hook
+"""
+
+RESOLUTION_HOOK_SCRIPT = """#!/usr/bin/env bash
+# TrustGate resolution hook. Installed by `trustgate init`.
+#
+# Runs after a tool call finishes, fails, or is denied, and records how an
+# earlier escalation was answered. Bookkeeping only: it never blocks anything,
+# writes nothing for actions that were not escalated, and always exits 0.
+set -uo pipefail
+
+TRUSTGATE_PYTHON="${TRUSTGATE_PYTHON:-%(python)s}"
+
+if [ ! -x "$TRUSTGATE_PYTHON" ]; then
+    TRUSTGATE_PYTHON="$(command -v python3 || command -v python)"
+fi
+
+exec "$TRUSTGATE_PYTHON" -m trustgate.adapters.coding.resolution_hook
 """
 
 
@@ -80,8 +108,8 @@ def backup_file(path: Path) -> Path:
     return destination
 
 
-def hook_entry(project_root: Path) -> dict:
-    """The settings.json fragment registering our hook.
+def hook_entry(project_root: Path, relative_path: str = HOOK_RELATIVE_PATH) -> dict:
+    """The settings.json fragment registering one of our hooks.
 
     No `matcher`, deliberately: a matcher restricts the hook to named tools, and
     a policy engine that only sees `Bash` cannot enforce a rule about `Read`,
@@ -92,42 +120,62 @@ def hook_entry(project_root: Path) -> dict:
         "hooks": [
             {
                 "type": "command",
-                "command": f"{project_root / HOOK_RELATIVE_PATH}",
+                "command": f"{project_root / relative_path}",
                 "timeout": 15,
             }
         ]
     }
 
 
-def _is_trustgate_entry(entry: dict) -> bool:
+def _is_trustgate_entry(entry: dict, marker: str = HOOK_MARKER) -> bool:
     for hook in entry.get("hooks", []) or []:
-        if HOOK_MARKER in str(hook.get("command", "")):
+        if marker in str(hook.get("command", "")):
             return True
     return False
 
 
-def merge_settings(settings: dict, project_root: Path) -> tuple[dict, bool]:
-    """Add or refresh our PreToolUse entry. Returns (settings, changed)."""
-    merged = json.loads(json.dumps(settings))  # deep copy, JSON-shaped by definition
-    hooks = merged.setdefault("hooks", {})
-    pre_tool_use = hooks.setdefault("PreToolUse", [])
+def _merge_event(
+    hooks: dict, event: str, desired: dict, marker: str
+) -> bool:
+    """Add or refresh one entry under one event. Returns whether it changed."""
+    entries = hooks.setdefault(event, [])
 
-    if not isinstance(pre_tool_use, list):
+    if not isinstance(entries, list):
         raise ValueError(
-            "hooks.PreToolUse in settings.json is not a list; refusing to modify it"
+            f"hooks.{event} in settings.json is not a list; refusing to modify it"
         )
 
-    desired = hook_entry(project_root)
-
-    for index, entry in enumerate(pre_tool_use):
-        if isinstance(entry, dict) and _is_trustgate_entry(entry):
+    for index, entry in enumerate(entries):
+        if isinstance(entry, dict) and _is_trustgate_entry(entry, marker):
             if entry == desired:
-                return merged, False
-            pre_tool_use[index] = desired
-            return merged, True
+                return False
+            entries[index] = desired
+            return True
 
-    pre_tool_use.append(desired)
-    return merged, True
+    entries.append(desired)
+    return True
+
+
+def merge_settings(settings: dict, project_root: Path) -> tuple[dict, bool]:
+    """Add or refresh every TrustGate hook entry. Returns (settings, changed).
+
+    Registers the gate on `PreToolUse` and the bookkeeping hook on the three
+    events that reveal how an escalation ended. Existing entries for other tools
+    are left exactly as they are.
+    """
+    merged = json.loads(json.dumps(settings))  # deep copy, JSON-shaped by definition
+    hooks = merged.setdefault("hooks", {})
+
+    changed = _merge_event(
+        hooks, "PreToolUse", hook_entry(project_root, HOOK_RELATIVE_PATH), HOOK_MARKER
+    )
+
+    resolution = hook_entry(project_root, RESOLUTION_HOOK_RELATIVE_PATH)
+    for event in RESOLUTION_EVENTS:
+        if _merge_event(hooks, event, resolution, RESOLUTION_HOOK_MARKER):
+            changed = True
+
+    return merged, changed
 
 
 def starter_policy_path(surface: str = "coding") -> Path:
@@ -162,21 +210,26 @@ def install(
             result.created.append(str(constitution_path))
         shutil.copyfile(source_policy, constitution_path)
 
-    # 2. Hook script.
-    hook_path = root / HOOK_RELATIVE_PATH
-    hook_path.parent.mkdir(parents=True, exist_ok=True)
-    script = HOOK_SCRIPT % {"python": python_executable or sys.executable}
-    existed = hook_path.exists()
-    if existed and hook_path.read_text(encoding="utf-8") == script:
-        result.skipped.append(str(hook_path))
-    else:
-        if existed:
-            result.backups.append(str(backup_file(hook_path)))
-            result.updated.append(str(hook_path))
+    # 2. Hook scripts: the gate, and the one that records how escalations ended.
+    interpreter = python_executable or sys.executable
+    for relative_path, template in (
+        (HOOK_RELATIVE_PATH, HOOK_SCRIPT),
+        (RESOLUTION_HOOK_RELATIVE_PATH, RESOLUTION_HOOK_SCRIPT),
+    ):
+        hook_path = root / relative_path
+        hook_path.parent.mkdir(parents=True, exist_ok=True)
+        script = template % {"python": interpreter}
+        existed = hook_path.exists()
+        if existed and hook_path.read_text(encoding="utf-8") == script:
+            result.skipped.append(str(hook_path))
         else:
-            result.created.append(str(hook_path))
-        hook_path.write_text(script, encoding="utf-8")
-    hook_path.chmod(0o755)
+            if existed:
+                result.backups.append(str(backup_file(hook_path)))
+                result.updated.append(str(hook_path))
+            else:
+                result.created.append(str(hook_path))
+            hook_path.write_text(script, encoding="utf-8")
+        hook_path.chmod(0o755)
 
     # 3. settings.json — merge, back up, never overwrite.
     settings_path = root / SETTINGS_RELATIVE_PATH
