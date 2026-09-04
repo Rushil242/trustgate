@@ -82,6 +82,7 @@ def to_action_request(payload: dict[str, Any]) -> ActionRequest:
         context=Context(
             ingested_content=_ingested_content(tool_input),
             session_id=payload.get("session_id"),
+            correlation_id=payload.get("tool_use_id"),
         ),
     )
 

@@ -82,6 +82,15 @@ class Context(BaseModel):
     session_id: str | None = None
     turn: int = 0
 
+    correlation_id: str | None = None
+    """The surface's own id for this action, when it has one.
+
+    Claude Code supplies `tool_use_id`; a voice platform supplies a call and turn
+    reference. It exists so a later event about the *same* action can be matched
+    back to the decision that escalated it — `request_id` is minted by us and the
+    surface never sees it, so it cannot be the join key.
+    """
+
 
 class ActionRequest(BaseModel):
     """The universal input. One shape for every surface."""
@@ -246,5 +255,66 @@ class AuditEntry(BaseModel):
     action_redacted: str
     effect: Effect
     reasons: list[Reason] = Field(default_factory=list)
+    prev_hash: str
+    entry_hash: str = ""
+
+    kind: str = "decision"
+    """Discriminator. A ledger now carries two shapes; see `ResolutionEntry`."""
+
+    correlation_id: str = ""
+    """Copied from the request's context, so a resolution can find this entry."""
+
+
+class Outcome(StrEnum):
+    """How an escalation ended.
+
+    `unknown` is a real, reportable state, not a placeholder. We observe the
+    human's answer through the surface's own events rather than owning the
+    prompt, and an observation we cannot classify must not be recorded as
+    approval. Guessing in the permissive direction is how a gate ends up
+    certifying something nobody agreed to.
+    """
+
+    approved = "approved"
+    denied = "denied"
+    expired = "expired"
+    unknown = "unknown"
+
+
+class Approver(BaseModel):
+    """Who answered, and how we came to know it.
+
+    `method` matters as much as `id`. "a person clicked approve in the TrustGate
+    console" and "the tool subsequently executed, so permission must have been
+    granted locally" are both evidence, and they are not equally strong. An
+    auditor is entitled to see which one they are looking at.
+    """
+
+    id: str = "local-user"
+    method: str = "unspecified"
+
+
+class ResolutionEntry(BaseModel):
+    """One ledger line recording how an earlier escalation was answered.
+
+    Appended into the same hash chain as decisions, so an answer cannot be
+    removed or back-dated without breaking verification the same way a decision
+    would. It is a separate line rather than an edit to the original entry
+    because the ledger is append-only by construction: rewriting the escalation
+    in place would defeat the chain it sits in.
+    """
+
+    seq: int
+    kind: str = "resolution"
+    request_id: str
+    """The escalated decision this answers."""
+
+    correlation_id: str = ""
+    ts: float
+    outcome: Outcome
+    approver: dict[str, Any]
+    detail: str = ""
+    """Verbatim text from the surface, e.g. a denial reason. Redacted on write."""
+
     prev_hash: str
     entry_hash: str = ""

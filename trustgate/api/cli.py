@@ -100,6 +100,49 @@ def cmd_verify_audit(args: argparse.Namespace) -> int:
     return EXIT_DENIED
 
 
+def cmd_pending(args: argparse.Namespace) -> int:
+    """List escalations nobody has answered.
+
+    Exits non-zero when any are open. An escalation left hanging means the
+    system asked for a human decision and never got one, which is a finding in
+    its own right and worth failing a check over.
+    """
+    import time
+
+    from trustgate.core.audit import AuditLedger
+    from trustgate.core.config import Config
+
+    cfg = Config.load()
+    path = args.audit or cfg.audit_path
+    open_items = AuditLedger(path).open_escalations()
+
+    if not open_items:
+        print(f"OK  no escalations awaiting a decision ({path})")
+        return EXIT_OK
+
+    now = time.time()
+    print(f"{len(open_items)} escalation(s) awaiting a decision ({path})\n")
+    for entry in open_items:
+        age = now - float(entry.get("ts", now))
+        rule = ""
+        reasons = entry.get("reasons") or []
+        if reasons:
+            rule = reasons[0].get("rule_id", "")
+        print(f"  seq {entry.get('seq')}  {_age(age):>8} ago  [{rule}]")
+        print(f"      {entry.get('action_redacted', '')}")
+    return EXIT_DENIED
+
+
+def _age(seconds: float) -> str:
+    if seconds < 90:
+        return f"{int(seconds)}s"
+    if seconds < 5400:
+        return f"{int(seconds // 60)}m"
+    if seconds < 172800:
+        return f"{int(seconds // 3600)}h"
+    return f"{int(seconds // 86400)}d"
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     from pathlib import Path
 
@@ -282,6 +325,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify = sub.add_parser("verify-audit", help="verify the audit hash chain")
     p_verify.add_argument("-a", "--audit", help="path to the audit ledger JSONL")
     p_verify.set_defaults(func=cmd_verify_audit)
+
+    p_pending = sub.add_parser(
+        "pending", help="list escalations that no human has answered"
+    )
+    p_pending.add_argument("-a", "--audit", help="path to the audit ledger JSONL")
+    p_pending.set_defaults(func=cmd_pending)
 
     p_serve = sub.add_parser("serve", help="run the HTTP Decision API")
     p_serve.add_argument("--host", default="127.0.0.1")
