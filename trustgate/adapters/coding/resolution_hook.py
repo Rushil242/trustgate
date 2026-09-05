@@ -135,6 +135,10 @@ def record(payload: dict[str, Any], ledger=None) -> dict[str, Any]:
             approver=Approver(id=principal_id(payload), method=METHODS.get(event, event)),
             correlation_id=correlation_id,
             detail=detail,
+            # Claude Code held the tool call at its own prompt until someone
+            # answered, so this answer did gate the action even though we only
+            # observed the result rather than serving the prompt ourselves.
+            gated=True,
         )
     except Exception as exc:  # noqa: BLE001
         return {"recorded": False, "why": f"could not append the resolution: {exc}"}

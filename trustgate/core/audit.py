@@ -107,6 +107,7 @@ class AuditLedger:
         approver: Approver,
         correlation_id: str = "",
         detail: str = "",
+        gated: bool = False,
     ) -> ResolutionEntry:
         """Append the answer to an earlier escalation.
 
@@ -128,6 +129,7 @@ class AuditLedger:
                 "approver": approver.model_dump(),
                 # Denial reasons are surface text and can quote the command.
                 "detail": redact(detail),
+                "gated": gated,
                 "prev_hash": prev_hash,
             }
             body["entry_hash"] = compute_hash(body, prev_hash)

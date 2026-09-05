@@ -17,6 +17,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
 
 from trustgate.core.audit import AuditLedger
 from trustgate.core.config import Config
@@ -24,9 +25,19 @@ from trustgate.core.constitution import Constitution, ConstitutionError
 from trustgate.core.engine import Engine
 from trustgate.core.guards.constitution_llm import ConstitutionGuard
 from trustgate.core.llm import build_llm
-from trustgate.core.models import ActionRequest, Decision
+from trustgate.core.models import ActionRequest, Approver, Decision, Outcome
 
 _state: dict = {}
+
+CONSOLE_METHOD = "console: a named person reviewed this and recorded a decision"
+
+
+class ResolveRequest(BaseModel):
+    """A human's answer to an escalation, submitted from the console."""
+
+    outcome: Outcome
+    approver: str = Field(min_length=1, max_length=200)
+    note: str = ""
 
 
 def build_app(config: Config | None = None) -> FastAPI:
@@ -97,6 +108,55 @@ def build_app(config: Config | None = None) -> FastAPI:
             entries = [e for e in entries if e.get("effect") == effect]
         entries = list(reversed(entries))[: max(1, min(limit, 2000))]
         return {"entries": entries, "total": len(all_entries)}
+
+    @app.post("/v1/escalations/{request_id}/resolve")
+    def resolve_escalation(request_id: str, body: ResolveRequest) -> dict:
+        """Record a named person's decision on an escalation.
+
+        This writes a judgment; it does not run or cancel anything. By the time
+        a reviewer opens the console the action has already been allowed or
+        refused at the surface, so the entry is stored with `gated: false`. The
+        distinction is the point: a sign-off recorded afterwards is a genuine
+        compliance record and is not the same thing as having held the action.
+        Live gating needs the adapter to wait on this endpoint, which is a
+        separate piece of work.
+        """
+        cfg: Config = _state["config"]
+        ledger = AuditLedger(cfg.audit_path)
+
+        if body.outcome not in (Outcome.approved, Outcome.denied):
+            # `unknown` and `expired` describe what we failed to learn. A person
+            # sitting in front of the action is never in that position.
+            raise HTTPException(422, "a person may only approve or deny")
+
+        approver = body.approver.strip()
+        if not approver:
+            # Refuse rather than fill in a placeholder. The entire value of this
+            # record is that a specific person's name is attached to it.
+            raise HTTPException(422, "an approver name is required")
+
+        open_items = [e for e in ledger.open_escalations() if e.get("request_id") == request_id]
+        if not open_items:
+            already = any(
+                e.get("kind") == "resolution" and e.get("request_id") == request_id
+                for e in ledger.read_all()
+            )
+            raise HTTPException(
+                409 if already else 404,
+                "this escalation has already been answered"
+                if already
+                else "no open escalation with that request id",
+            )
+
+        entry = ledger.write_resolution(
+            request_id=request_id,
+            outcome=body.outcome,
+            approver=Approver(id=approver, method=CONSOLE_METHOD),
+            correlation_id=open_items[-1].get("correlation_id", ""),
+            detail=body.note,
+            gated=False,
+        )
+        return entry.model_dump()
 
     @app.get("/v1/audit/verify")
     def audit_verify() -> dict:
