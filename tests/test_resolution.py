@@ -281,3 +281,100 @@ class TestCorrelationId:
     def test_the_ledger_persists_it(self, ledger):
         _escalate(ledger)
         assert ledger.read_all()[0]["correlation_id"] == TOOL_USE_ID
+
+
+# --------------------------------------------------------------------------
+# Deciding from the console
+# --------------------------------------------------------------------------
+
+fastapi = pytest.importorskip("fastapi", reason="server extra not installed")
+from fastapi.testclient import TestClient  # noqa: E402
+
+from trustgate.api.server import build_app  # noqa: E402
+from trustgate.core.config import Config  # noqa: E402
+
+POLICY = (
+    __import__("pathlib").Path(__file__).resolve().parents[1]
+    / "trustgate" / "policies" / "starter.coding.yaml"
+)
+
+
+@pytest.fixture
+def api(tmp_path):
+    cfg = Config()
+    cfg.constitution_path = str(POLICY)
+    cfg.audit_path = str(tmp_path / "audit.jsonl")
+    cfg.judge.provider = "fake"
+    ledger = AuditLedger(cfg.audit_path)
+    with TestClient(build_app(cfg)) as client:
+        yield client, ledger
+
+
+class TestResolveEndpoint:
+    def test_a_named_person_can_approve(self, api):
+        client, ledger = api
+        escalation = _escalate(ledger)
+
+        res = client.post(
+            f"/v1/escalations/{escalation.request_id}/resolve",
+            json={"outcome": "approved", "approver": "priya@acme.com", "note": "planned teardown"},
+        )
+
+        assert res.status_code == 200
+        body = res.json()
+        assert body["outcome"] == "approved"
+        assert body["approver"]["id"] == "priya@acme.com"
+        assert body["detail"] == "planned teardown"
+        assert ledger.open_escalations() == []
+        assert ledger.verify().ok
+
+    def test_a_console_decision_did_not_hold_the_action(self, api):
+        client, ledger = api
+        escalation = _escalate(ledger)
+        res = client.post(
+            f"/v1/escalations/{escalation.request_id}/resolve",
+            json={"outcome": "denied", "approver": "priya"},
+        )
+        assert res.json()["gated"] is False
+
+    def test_an_observed_answer_did_hold_the_action(self, ledger):
+        _escalate(ledger)
+        resolution_hook.record(_payload("PostToolUse"), ledger=ledger)
+        assert ledger.read_all()[-1]["gated"] is True
+
+    def test_an_unsigned_decision_is_refused(self, api):
+        client, ledger = api
+        escalation = _escalate(ledger)
+        res = client.post(
+            f"/v1/escalations/{escalation.request_id}/resolve",
+            json={"outcome": "approved", "approver": "   "},
+        )
+        assert res.status_code == 422
+        assert len(ledger.open_escalations()) == 1
+
+    @pytest.mark.parametrize("outcome", ["unknown", "expired"])
+    def test_a_person_may_only_approve_or_deny(self, api, outcome):
+        client, ledger = api
+        escalation = _escalate(ledger)
+        res = client.post(
+            f"/v1/escalations/{escalation.request_id}/resolve",
+            json={"outcome": outcome, "approver": "priya"},
+        )
+        assert res.status_code == 422
+        assert len(ledger.open_escalations()) == 1
+
+    def test_answering_twice_conflicts(self, api):
+        client, ledger = api
+        escalation = _escalate(ledger)
+        payload = {"outcome": "approved", "approver": "priya"}
+        url = f"/v1/escalations/{escalation.request_id}/resolve"
+        assert client.post(url, json=payload).status_code == 200
+        assert client.post(url, json=payload).status_code == 409
+
+    def test_an_unknown_escalation_is_not_found(self, api):
+        client, _ = api
+        res = client.post(
+            "/v1/escalations/no-such-request/resolve",
+            json={"outcome": "approved", "approver": "priya"},
+        )
+        assert res.status_code == 404

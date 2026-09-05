@@ -163,6 +163,24 @@
   .oc.unknown{color:var(--ink-2);background:var(--surface-3);border-color:var(--line-strong)}
   .stat.urgent .v{color:var(--warn)}
 
+  /* Decision controls in the drawer. Deliberately not in the table rows: you
+     should read the rule that fired before you sign your name to an answer. */
+  .warnbox{margin:0 0 12px;padding:9px 11px;border-radius:5px;font-size:12px;line-height:1.5;
+           color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-dot)}
+  .fld{display:block;margin-bottom:9px}
+  .fld span{display:block;font-size:11px;color:var(--ink-3);margin-bottom:4px}
+  .fld input{width:100%;padding:7px 9px;border:1px solid var(--line-strong);border-radius:5px;
+             background:var(--surface);color:var(--ink);font:inherit;font-size:12.5px}
+  .fld input:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+  .acts{display:flex;gap:8px;margin-top:12px}
+  .acts .btn{flex:1;justify-content:center;padding:8px 12px;font-size:12.5px;font-weight:500;
+             border-radius:5px;cursor:pointer;border:1px solid var(--line-strong);
+             background:var(--surface);color:var(--ink)}
+  .acts .btn.ok{color:var(--ok);border-color:var(--ok-dot);background:var(--ok-bg)}
+  .acts .btn.no{color:var(--danger);border-color:var(--danger-dot);background:var(--danger-bg)}
+  .acts .btn:disabled{opacity:.55;cursor:default}
+  .err{margin:10px 0 0;font-size:12px;color:var(--danger)}
+
   td.action{font-family:var(--mono);font-size:12.5px;color:var(--ink);
     max-width:1px;width:52%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .chip{
@@ -516,24 +534,100 @@
 
     if (!e.resolution) {
       return `<div class="sec">
-        <h4>Outcome</h4>
-        <p class="muted" style="margin:0;font-size:12.5px">
-          Awaiting a decision. Nobody has answered this escalation.
-        </p></div>`;
+        <h4>Your decision</h4>
+        <p class="muted" style="margin:0 0 10px;font-size:12.5px">
+          Nobody has answered this yet. Recording a decision appends it to the
+          hash chain under your name.
+        </p>
+        <p class="warnbox">
+          This records a judgment. It does not run or cancel the action, which
+          was already allowed or refused at the agent minutes ago. The entry is
+          stored as a review, not as authorization.
+        </p>
+        <label class="fld"><span>Your name or email</span>
+          <input id="approverName" type="text" placeholder="priya@acme.com"
+                 autocomplete="off" spellcheck="false" value="${esc(loadApprover())}" />
+        </label>
+        <label class="fld"><span>Note (optional)</span>
+          <input id="approverNote" type="text" placeholder="Why this was or was not acceptable"
+                 autocomplete="off" />
+        </label>
+        <div class="acts">
+          <button class="btn ok" data-resolve="approved" data-req="${esc(e.request_id)}">Approve</button>
+          <button class="btn no" data-resolve="denied" data-req="${esc(e.request_id)}">Deny</button>
+        </div>
+        <p class="err" id="resolveErr" hidden></p>
+      </div>`;
     }
 
     const r = e.resolution;
     const a = r.approver || {};
+    // `gated` is the difference between "a person held this action until they
+    // answered" and "a person judged it afterwards". Never let the panel imply
+    // the stronger of the two.
+    const held = r.gated
+      ? `<span class="oc approved" style="margin-left:0">held the action</span>`
+      : `<span class="oc unknown" style="margin-left:0">recorded afterwards</span>`;
     return `<div class="sec">
       <h4>Outcome</h4>
       <dl class="kv">
         <dt>Answer</dt><dd><span class="oc ${esc(r.outcome)}" style="margin-left:0">${esc(r.outcome)}</span></dd>
         <dt>Answered by</dt><dd>${esc(a.id || "—")}</dd>
         <dt>Established</dt><dd>${esc(a.method || "—")}</dd>
+        <dt>Authority</dt><dd>${held}</dd>
         <dt>Answered at</dt><dd>${esc(absTime(r.ts))}</dd>
-        ${r.detail ? `<dt>Reported</dt><dd>${esc(r.detail)}</dd>` : ""}
+        ${r.detail ? `<dt>Note</dt><dd>${esc(r.detail)}</dd>` : ""}
         <dt>Chain seq</dt><dd>${r.seq}</dd>
       </dl></div>`;
+  }
+
+  /* The reviewer's name is theirs, not the machine's, so it is remembered per
+     browser rather than guessed from the host. */
+  const APPROVER_KEY = "trustgate.approver";
+  function loadApprover() {
+    try { return localStorage.getItem(APPROVER_KEY) || ""; } catch { return ""; }
+  }
+  function saveApprover(v) {
+    try { localStorage.setItem(APPROVER_KEY, v); } catch { /* private mode */ }
+  }
+
+  async function submitResolution(requestId, outcome, btn) {
+    const nameEl = $("approverName");
+    const noteEl = $("approverNote");
+    const err = $("resolveErr");
+    const approver = (nameEl && nameEl.value || "").trim();
+
+    if (!approver) {
+      err.hidden = false;
+      err.textContent = "Enter your name first. An unsigned decision is not worth recording.";
+      if (nameEl) nameEl.focus();
+      return;
+    }
+    saveApprover(approver);
+
+    const buttons = document.querySelectorAll("[data-resolve]");
+    buttons.forEach((b) => (b.disabled = true));
+    btn.textContent = "Recording…";
+
+    try {
+      const res = await fetch(`/v1/escalations/${encodeURIComponent(requestId)}/resolve`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ outcome, approver, note: (noteEl && noteEl.value) || "" }),
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || `HTTP ${res.status}`);
+      }
+      const seq = state.selected;
+      await poll();
+      openDrawer(seq);
+    } catch (e2) {
+      err.hidden = false;
+      err.textContent = String(e2.message || e2);
+      buttons.forEach((b) => (b.disabled = false));
+      btn.textContent = outcome === "approved" ? "Approve" : "Deny";
+    }
   }
 
   function openDrawer(seq) {
@@ -631,6 +725,11 @@
   $("rows").addEventListener("click", (ev) => {
     const tr = ev.target.closest("tr");
     if (tr) openDrawer(Number(tr.dataset.seq));
+  });
+
+  $("dBody").addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-resolve]");
+    if (btn) submitResolution(btn.dataset.req, btn.dataset.resolve, btn);
   });
 
   $("closeDrawer").addEventListener("click", closeDrawer);

@@ -316,5 +316,17 @@ class ResolutionEntry(BaseModel):
     detail: str = ""
     """Verbatim text from the surface, e.g. a denial reason. Redacted on write."""
 
+    gated: bool = False
+    """Whether this answer actually held the action, or only judged it after.
+
+    Two very different facts, and collapsing them would make the ledger lie in
+    the most damaging way available to it. `true` means the action could not
+    proceed until someone answered. `false` means the action already resolved
+    on its own and a reviewer recorded a judgment afterwards, which is a real
+    and useful compliance record but is not authorization.
+
+    Defaults to `false` because that is the weaker claim.
+    """
+
     prev_hash: str
     entry_hash: str = ""
