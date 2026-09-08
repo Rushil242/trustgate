@@ -108,7 +108,38 @@ def backup_file(path: Path) -> Path:
     return destination
 
 
-def hook_entry(project_root: Path, relative_path: str = HOOK_RELATIVE_PATH) -> dict:
+DEFAULT_HOOK_TIMEOUT = 15
+
+# Slack between the approval window closing and Claude Code killing the hook.
+# Without it the two race, Claude Code wins, and the wait never gets to record
+# the expiry it was about to write.
+TIMEOUT_MARGIN = 20
+
+
+def gate_timeout(config=None) -> int:
+    """Seconds Claude Code should allow the gate to run.
+
+    In remote approval mode the hook blocks for as long as the approval window,
+    so the hook's own timeout has to be the larger of the two. Getting this
+    wrong is not a slow gate, it is a broken one: Claude Code terminates the
+    hook and the tool call falls back to the normal permission flow, which is
+    the local prompt we were trying to take out of the loop.
+    """
+    if config is None:
+        from trustgate.core.config import Config
+
+        config = Config.load()
+
+    if not config.approval.is_remote:
+        return DEFAULT_HOOK_TIMEOUT
+    return int(config.approval.timeout) + TIMEOUT_MARGIN
+
+
+def hook_entry(
+    project_root: Path,
+    relative_path: str = HOOK_RELATIVE_PATH,
+    timeout: int = DEFAULT_HOOK_TIMEOUT,
+) -> dict:
     """The settings.json fragment registering one of our hooks.
 
     No `matcher`, deliberately: a matcher restricts the hook to named tools, and
@@ -121,7 +152,7 @@ def hook_entry(project_root: Path, relative_path: str = HOOK_RELATIVE_PATH) -> d
             {
                 "type": "command",
                 "command": f"{project_root / relative_path}",
-                "timeout": 15,
+                "timeout": timeout,
             }
         ]
     }
@@ -156,7 +187,7 @@ def _merge_event(
     return True
 
 
-def merge_settings(settings: dict, project_root: Path) -> tuple[dict, bool]:
+def merge_settings(settings: dict, project_root: Path, config=None) -> tuple[dict, bool]:
     """Add or refresh every TrustGate hook entry. Returns (settings, changed).
 
     Registers the gate on `PreToolUse` and the bookkeeping hook on the three
@@ -167,10 +198,16 @@ def merge_settings(settings: dict, project_root: Path) -> tuple[dict, bool]:
     hooks = merged.setdefault("hooks", {})
 
     changed = _merge_event(
-        hooks, "PreToolUse", hook_entry(project_root, HOOK_RELATIVE_PATH), HOOK_MARKER
+        hooks,
+        "PreToolUse",
+        hook_entry(project_root, HOOK_RELATIVE_PATH, gate_timeout(config)),
+        HOOK_MARKER,
     )
 
-    resolution = hook_entry(project_root, RESOLUTION_HOOK_RELATIVE_PATH)
+    # The bookkeeping hook never waits on a human, so it keeps the short budget.
+    resolution = hook_entry(
+        project_root, RESOLUTION_HOOK_RELATIVE_PATH, DEFAULT_HOOK_TIMEOUT
+    )
     for event in RESOLUTION_EVENTS:
         if _merge_event(hooks, event, resolution, RESOLUTION_HOOK_MARKER):
             changed = True
@@ -187,8 +224,9 @@ def install(
     surface: str = "coding",
     python_executable: str | None = None,
     force: bool = False,
+    config=None,
 ) -> InstallResult:
-    """Install the constitution, hook script, and settings entry."""
+    """Install the constitution, hook scripts, and settings entries."""
     import sys
 
     root = Path(project_root) if project_root else Path.cwd()
@@ -247,7 +285,7 @@ def install(
     else:
         existing = {}
 
-    merged, changed = merge_settings(existing, root)
+    merged, changed = merge_settings(existing, root, config)
 
     if not changed:
         result.skipped.append(str(settings_path))

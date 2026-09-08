@@ -204,6 +204,31 @@ class AuditLedger:
 
         return [e for e in escalations if e.get("request_id") not in answered]
 
+    def find_resolution(self, request_id: str) -> dict | None:
+        """The answer to one escalation, or None if nobody has answered.
+
+        Scans from the end, because a waiter polling for an answer is looking
+        for something that was just appended, and the cheap substring test
+        skips JSON parsing on the overwhelming majority of lines.
+        """
+        if not self.path.is_file() or not request_id:
+            return None
+
+        needle = f'"{request_id}"'
+        with self.path.open("r", encoding="utf-8") as fh:
+            lines = fh.readlines()
+
+        for line in reversed(lines):
+            if needle not in line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if entry.get("kind") == "resolution" and entry.get("request_id") == request_id:
+                return entry
+        return None
+
     def find_open_escalation(self, correlation_id: str) -> dict | None:
         """The unanswered escalation matching a surface-native id, if any.
 

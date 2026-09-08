@@ -26,7 +26,14 @@ import json
 import sys
 from typing import Any
 
-from trustgate.core.models import Action, ActionRequest, ActionType, Context, Decision, Effect
+from trustgate.core.models import (
+    Action,
+    ActionRequest,
+    ActionType,
+    Context,
+    Decision,
+    Effect,
+)
 
 HOOK_EVENT = "PreToolUse"
 
@@ -158,7 +165,7 @@ def summarize(decision: Decision) -> str:
     return " ".join(parts)
 
 
-def decide(payload: dict[str, Any], engine=None) -> dict[str, Any]:
+def decide(payload: dict[str, Any], engine=None, config=None) -> dict[str, Any]:
     """Full hook cycle for one payload. Never raises."""
     try:
         request = to_action_request(payload)
@@ -166,22 +173,102 @@ def decide(payload: dict[str, Any], engine=None) -> dict[str, Any]:
         return _fail_safe(f"could not interpret the tool call: {exc}")
 
     try:
+        from trustgate.core.config import Config
+
+        cfg = config or Config.load()
+    except Exception:  # noqa: BLE001
+        cfg = None
+
+    try:
         if engine is None:
-            engine = _build_engine()
+            engine = _build_engine(cfg)
         decision = engine.decide(request)
     except Exception as exc:  # noqa: BLE001
         return _fail_safe(f"policy engine error: {exc}")
 
+    if decision.effect is Effect.escalate and cfg is not None and cfg.approval.is_remote:
+        return _await_remote_decision(decision, cfg)
+
     return to_hook_response(decision)
 
 
-def _build_engine():
+def _await_remote_decision(decision: Decision, cfg) -> dict[str, Any]:
+    """Hold the tool call until someone answers in the console.
+
+    Claude Code is blocked for the whole of this, which is the point: an
+    approval that does not stop the action is a comment. The hook's own
+    `timeout` in settings.json must exceed the approval window, or Claude Code
+    kills us first and the wait never completes; `trustgate init` sizes it.
+    """
+    from trustgate.core.approval import wait_for_decision
+    from trustgate.core.audit import AuditLedger
+
+    try:
+        result = wait_for_decision(
+            AuditLedger(cfg.audit_path),
+            decision.request_id,
+            timeout=cfg.approval.timeout,
+            poll_interval=cfg.approval.poll_interval,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # We could not run the wait at all, so nobody was asked. That is not a
+        # reason to let the action through.
+        return _response(
+            "deny",
+            f"Blocked by TrustGate: could not reach the approval queue ({exc}). "
+            f"{summarize(decision)}",
+        )
+
+    if result.approved:
+        return _response(
+            "allow",
+            f"Approved by {result.approver} in the TrustGate console."
+            + (f" Note: {result.note}" if result.note else ""),
+        )
+
+    if result.timed_out and cfg.approval.on_timeout.lower() == "ask":
+        # Configured to fall back to the local prompt. Worth saying out loud
+        # that the person now deciding is the person being gated.
+        return _response(
+            "ask",
+            "TrustGate: nobody answered in the console within "
+            f"{cfg.approval.timeout:.0f}s, so this falls back to you. "
+            f"{summarize(decision)}",
+        )
+
+    if result.timed_out:
+        return _response(
+            "deny",
+            "Blocked by TrustGate: nobody approved this within "
+            f"{cfg.approval.timeout:.0f}s. Silence is not approval. "
+            f"{summarize(decision)}",
+        )
+
+    who = f" by {result.approver}" if result.approver else ""
+    return _response(
+        "deny",
+        f"Denied{who} in the TrustGate console."
+        + (f" Note: {result.note}" if result.note else ""),
+    )
+
+
+def _response(permission: str, reason: str) -> dict[str, Any]:
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": HOOK_EVENT,
+            "permissionDecision": permission,
+            "permissionDecisionReason": reason,
+        }
+    }
+
+
+def _build_engine(config=None):
     from trustgate.core.audit import AuditLedger
     from trustgate.core.config import Config
     from trustgate.core.constitution import Constitution
     from trustgate.core.engine import Engine
 
-    cfg = Config.load()
+    cfg = config or Config.load()
     constitution = Constitution.from_file(cfg.constitution_path)
 
     judge = None

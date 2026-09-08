@@ -67,10 +67,43 @@ class JudgeConfig:
 
 
 @dataclass
+class ApprovalConfig:
+    """Who answers an escalation, and how long the agent waits for them.
+
+    `local` is the default and preserves the existing behaviour: the escalation
+    is handed to the agent's own permission prompt, so the person at the
+    keyboard decides. That is fine for one developer and useless for an audit,
+    because the person being controlled is also the approver.
+
+    `remote` holds the action and waits for a named person to answer in the
+    console. It is the only mode where the approval is a control rather than a
+    record, and it is opt-in because it makes an unattended agent stop dead.
+    """
+
+    mode: str = "local"
+    timeout: float = 180.0
+    poll_interval: float = 1.0
+
+    on_timeout: str = "deny"
+    """What an unanswered escalation becomes.
+
+    `deny` is the default because "nobody answered" is not consent, and a gate
+    that resolves silence into approval is not a gate. `ask` falls back to the
+    agent's local prompt, which keeps work moving and gives up the separation
+    between the person acting and the person approving. Choose knowingly.
+    """
+
+    @property
+    def is_remote(self) -> bool:
+        return self.mode.lower() == "remote"
+
+
+@dataclass
 class Config:
     constitution_path: str = "trustgate.constitution.yaml"
     audit_path: str = field(default_factory=lambda: str(DEFAULT_HOME / "audit.jsonl"))
     judge: JudgeConfig = field(default_factory=JudgeConfig)
+    approval: ApprovalConfig = field(default_factory=ApprovalConfig)
     verbose: bool = False
 
     @classmethod
@@ -104,6 +137,15 @@ class Config:
             self.judge.timeout = float(judge.get("timeout", self.judge.timeout))
             self.judge.enabled = bool(judge.get("enabled", self.judge.enabled))
 
+        approval = data.get("approval", {})
+        if isinstance(approval, dict):
+            self.approval.mode = approval.get("mode", self.approval.mode)
+            self.approval.timeout = float(approval.get("timeout", self.approval.timeout))
+            self.approval.poll_interval = float(
+                approval.get("poll_interval", self.approval.poll_interval)
+            )
+            self.approval.on_timeout = approval.get("on_timeout", self.approval.on_timeout)
+
     def _apply_env(self) -> None:
         env = os.environ
         self.constitution_path = env.get("TRUSTGATE_CONSTITUTION", self.constitution_path)
@@ -118,6 +160,20 @@ class Config:
             self.judge.enabled = False
         if env.get("TRUSTGATE_VERBOSE", "").lower() in ("1", "true", "yes"):
             self.verbose = True
+
+        self.approval.mode = env.get("TRUSTGATE_APPROVAL_MODE", self.approval.mode)
+        self.approval.on_timeout = env.get(
+            "TRUSTGATE_APPROVAL_ON_TIMEOUT", self.approval.on_timeout
+        )
+        for var, attr in (
+            ("TRUSTGATE_APPROVAL_TIMEOUT", "timeout"),
+            ("TRUSTGATE_APPROVAL_POLL_INTERVAL", "poll_interval"),
+        ):
+            if var in env:
+                try:
+                    setattr(self.approval, attr, float(env[var]))
+                except ValueError:
+                    pass
 
     def _resolve_judge_preset(self) -> None:
         """Fill blank judge fields from the provider preset and environment."""
