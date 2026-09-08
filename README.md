@@ -2,23 +2,24 @@
 
 # TrustGate
 
-### Your AI agent has a shell, your prod database, and your payment API.<br>TrustGate decides what it's actually allowed to do.
+### Your AI agent has a shell, your prod database, and your payment API.<br>TrustGate decides what it's actually allowed to do, then hands you the proof.
 
 [![Live demo](https://img.shields.io/badge/live%20demo-trustgate.rushil--cv26.workers.dev-16181c)](https://trustgate.rushil-cv26.workers.dev)
 [![CI](https://github.com/Rushil242/trustgate/actions/workflows/ci.yml/badge.svg)](https://github.com/Rushil242/trustgate/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-288%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-380%20passing-brightgreen.svg)](tests/)
 [![Attacks blocked](https://img.shields.io/badge/red--team-41%2F41%20handled-brightgreen.svg)](redteam/)
 [![False positives](https://img.shields.io/badge/false%20positives-0%2F24-brightgreen.svg)](redteam/)
 
-**Deterministic policy enforcement + a tamper-evident audit log for AI agents.**<br>
+**Deterministic policy enforcement, a tamper-evident audit log, and a one-command
+evidence pack for the day a customer's security team asks what your agent did.**<br>
 Works with Claude Code today. Same engine governs voice agents.
 
 **[See an attack get stopped, live &rarr;](https://trustgate.rushil-cv26.workers.dev)**<br>
 <sub>A support agent, a prompt injection, and the same call run twice: once with a gate in front of the tool, once without.</sub>
 
-[Live demo](https://trustgate.rushil-cv26.workers.dev) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Benchmarks](#benchmarks) · [Threat model](docs/THREAT_MODEL.md) · [Limitations](#what-this-does-not-do)
+[Live demo](https://trustgate.rushil-cv26.workers.dev) · [Quick start](#quick-start) · [Evidence pack](#evidence-pack) · [How it works](#how-it-works) · [Benchmarks](#benchmarks) · [Threat model](docs/THREAT_MODEL.md) · [Limitations](#what-this-does-not-do)
 
 </div>
 
@@ -230,6 +231,45 @@ Because TrustGate observes that prompt rather than owning it, the answer is some
 
 ---
 
+## Evidence pack
+
+The log answers "what did the agent do." A customer's security team asks a
+harder version of that, usually while a contract is sitting in procurement:
+*which controls were in force, what got stopped, who approved the rest, and how
+do we know the record is real?*
+
+One command turns the ledger into a document that answers all four.
+
+```console
+$ trustgate evidence --since 2026-09-01 --out pack.html
+
+Wrote pack.html
+  12 actions checked, 3 blocked, 4 escalated
+  4 of 4 escalations answered by a person
+  1 answer(s) could not be established
+  record intact, 16 entries verified
+```
+
+The page is self-contained, prints to PDF, and fetches nothing when opened. It
+carries the controls in force with the plain-English statement of each rule,
+every blocked action and the rule that stopped it, every escalation with who
+answered and whether their answer **held the action** or was only **recorded
+afterwards**, and the chain verification result.
+
+`--format md` gives you the same thing as Markdown, for pasting straight into a
+questionnaire reply. `--format json` gives the raw counts.
+
+**It also reports what went wrong.** Unanswered escalations, outcomes that could
+not be established, and a broken hash chain all appear in a box at the top
+rather than being quietly left out, and the command exits non-zero if the chain
+failed. A report listing only good news is not evidence, and any reviewer worth
+having will read it that way.
+
+Nothing in the pack is estimated. Every figure is a count of entries written at
+the moment each action was proposed.
+
+---
+
 ## Benchmarks
 
 | | Coding | Voice |
@@ -271,9 +311,13 @@ Stated plainly, because a security tool vague about its limits is worse than one
 
 **Free and MIT forever:** the engine, all five guards, the constitution format, both adapters, local tamper-evident audit, the CLI, the HTTP daemon, Docker, and the red-team suite. Everything that helps one developer.
 
-**Planned commercial (TrustGate Cloud):** fleet policy management across repos and agents, dashboards and alerting, SSO/RBAC, immutable cloud audit with SIEM export, compliance reporting, a hosted judge, and industry policy packs. Everything that helps a *team* prove and manage agent behaviour at scale.
+The line is drawn on one question: **can it run on your own machine and help one person?** If yes, it is free, and that includes the evidence pack.
 
-Deploying agents somewhere the audit trail matters, or want a policy pack for your stack? **[Open an issue](https://github.com/Rushil242/trustgate/issues/new/choose)** or start a [discussion](https://github.com/Rushil242/trustgate/discussions).
+**Paid:** anything that has to be always on, shared across a team, or held somewhere the person being audited cannot reach. Hosted immutable audit with SIEM export, a browser approval queue that holds actions across a fleet, SSO and RBAC, and industry policy packs.
+
+The custody point is the honest reason the hosted version exists, and it is worth saying plainly: a record you keep on your own disk proves it was not *edited*, because the hash chain says so. It does not prove it was not *deleted*. For your own engineering that distinction rarely matters. For a reviewer deciding whether to trust your record, it is the whole question.
+
+**Stuck in a customer's security review right now?** That is the problem this was built around. **[Open an issue](https://github.com/Rushil242/trustgate/issues/new/choose)** or start a [discussion](https://github.com/Rushil242/trustgate/discussions).
 
 ---
 
@@ -282,7 +326,7 @@ Deploying agents somewhere the audit trail matters, or want a policy pack for yo
 Bypasses are the most useful contribution. Every accepted one becomes a permanent regression case in the suite before the fix merges — see [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
 ```bash
-uv run pytest        # 288 tests
+uv run pytest        # 380 tests
 uv run ruff check .
 uv run trustgate test
 ```
