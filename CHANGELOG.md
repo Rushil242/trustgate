@@ -9,6 +9,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Evidence pack** — `trustgate evidence` turns the ledger into a document you
+  can hand to a customer's security team. Self-contained HTML (prints to PDF),
+  Markdown for pasting into a questionnaire reply, or JSON. Lists the controls
+  in force with their plain-English statements, every blocked action, every
+  escalation with who answered and whether that answer held the action, the
+  chain verification result, and a mapping of common review questions to what
+  the ledger can and cannot evidence.
+- **Remote approval mode** — `approval.mode = "remote"` makes the gate wait for
+  a named person to answer in the console before the action proceeds. Off by
+  default. `trustgate init` now sizes the `PreToolUse` hook timeout above the
+  approval window, since Claude Code kills a hook at its configured timeout and
+  a short budget turns a waiting gate into a silent fallback to the local prompt.
+
 - **Escalations now record their answer.** The ledger previously held the
   question ("a human must decide this") and never the outcome, so it could not
   answer the thing an auditor actually asks. A new `resolution` entry is

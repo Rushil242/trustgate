@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -141,6 +142,77 @@ def _age(seconds: float) -> str:
     if seconds < 172800:
         return f"{int(seconds // 3600)}h"
     return f"{int(seconds // 86400)}d"
+
+
+def cmd_evidence(args: argparse.Namespace) -> int:
+    """Turn the ledger into a document you can hand to a reviewer.
+
+    Exits non-zero when the record failed its integrity check. A pack whose own
+    chain is broken should not be quietly emailed to a customer, so the command
+    still writes the file (it says so, prominently) and then fails loudly.
+    """
+    from datetime import datetime
+
+    from trustgate.core import evidence
+    from trustgate.core.audit import AuditLedger
+    from trustgate.core.config import Config
+    from trustgate.core.constitution import Constitution, ConstitutionError
+
+    cfg = Config.load()
+    ledger = AuditLedger(args.audit or cfg.audit_path)
+
+    constitution = None
+    try:
+        constitution = Constitution.from_file(args.constitution or cfg.constitution_path)
+    except (ConstitutionError, OSError) as exc:
+        # Worth continuing. The activity record is the bulk of the value, and a
+        # pack that lists what happened without the rule text is still useful.
+        print(f"warning: could not load the policy ({exc}); "
+              "the pack will omit the rules section", file=sys.stderr)
+
+    def parse_day(value: str | None, end_of_day: bool) -> float | None:
+        if not value:
+            return None
+        try:
+            day = datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=UTC)
+        except ValueError:
+            print(f"error: --{'to' if end_of_day else 'from'} must look like "
+                  f"2026-09-01 (got {value!r})", file=sys.stderr)
+            raise SystemExit(EXIT_ERROR) from None
+        if end_of_day:
+            day = day.replace(hour=23, minute=59, second=59)
+        return day.timestamp()
+
+    pack = evidence.build(
+        ledger,
+        constitution,
+        start=parse_day(args.since, False),
+        end=parse_day(args.until, True),
+    )
+
+    if args.format == "json":
+        print(evidence.to_json(pack))
+        return EXIT_OK if pack.chain_ok else EXIT_DENIED
+
+    written = evidence.write(pack, args.out, args.format)
+
+    print(f"Wrote {written}")
+    print(f"  {pack.decisions} actions checked, "
+          f"{pack.effects.get('block', 0)} blocked, {len(pack.escalations)} escalated")
+    print(f"  {pack.answered} of {len(pack.escalations)} escalations answered by a person")
+    if pack.open_escalations:
+        print(f"  {len(pack.open_escalations)} never answered — disclosed in the pack")
+    if pack.unclear:
+        print(f"  {len(pack.unclear)} answer(s) could not be established")
+
+    if not pack.chain_ok:
+        print(f"\nFAIL  the record did not verify: {pack.chain_detail}", file=sys.stderr)
+        print("      the pack says so at the top; do not send it until this is "
+              "explained", file=sys.stderr)
+        return EXIT_DENIED
+
+    print(f"  record intact, {pack.chain_entries} entries verified")
+    return EXIT_OK
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
@@ -325,6 +397,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify = sub.add_parser("verify-audit", help="verify the audit hash chain")
     p_verify.add_argument("-a", "--audit", help="path to the audit ledger JSONL")
     p_verify.set_defaults(func=cmd_verify_audit)
+
+    p_evidence = sub.add_parser(
+        "evidence", help="build a control and audit evidence pack from the ledger"
+    )
+    p_evidence.add_argument("-a", "--audit", help="path to the audit ledger JSONL")
+    p_evidence.add_argument("-c", "--constitution", help="path to the policy YAML")
+    p_evidence.add_argument("--since", metavar="YYYY-MM-DD", help="start of the period")
+    p_evidence.add_argument("--until", metavar="YYYY-MM-DD", help="end of the period")
+    p_evidence.add_argument(
+        "-f", "--format", default="html", choices=["html", "md", "json"]
+    )
+    p_evidence.add_argument(
+        "-o", "--out", default="trustgate-evidence.html", help="file to write"
+    )
+    p_evidence.set_defaults(func=cmd_evidence)
 
     p_pending = sub.add_parser(
         "pending", help="list escalations that no human has answered"
