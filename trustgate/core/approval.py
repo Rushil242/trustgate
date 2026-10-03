@@ -75,6 +75,8 @@ def wait_for_decision(
     while True:
         entry = ledger.find_resolution(request_id)
         if entry is not None:
+            if entry.get("_from_cloud"):
+                _record_cloud_answer(ledger, request_id, entry)
             return _from_entry(entry, _clock() - started)
 
         remaining = deadline - _clock()
@@ -101,6 +103,32 @@ def wait_for_decision(
             pass
 
     return ApprovalResult(outcome=Outcome.expired, waited=waited, timed_out=True)
+
+
+def _record_cloud_answer(ledger, request_id: str, entry: dict) -> None:
+    """Copy a reviewer's cloud answer into this machine's own chain.
+
+    The local ledger should be complete on its own: a reader of this machine's
+    file must be able to see that the escalation was answered, by whom, and that
+    the answer held the action. The line then syncs back up like any other.
+    """
+    try:
+        outcome = Outcome(entry.get("outcome", ""))
+    except ValueError:
+        outcome = Outcome.unknown
+    approver = entry.get("approver") or {}
+    try:
+        ledger.write_resolution(
+            request_id=request_id,
+            outcome=outcome,
+            approver=Approver(
+                id=str(approver.get("id", "")), method=str(approver.get("method", ""))
+            ),
+            detail=str(entry.get("detail", "")),
+            gated=True,
+        )
+    except OSError:
+        pass
 
 
 def _from_entry(entry: dict, waited: float) -> ApprovalResult:
