@@ -99,11 +99,41 @@ class ApprovalConfig:
 
 
 @dataclass
+class CloudConfig:
+    """Where this machine ships its decisions, if anywhere.
+
+    Empty `url` means local only, which is the default and stays fully
+    functional. The API key is read from `TRUSTGATE_CLOUD_KEY` and never from
+    the TOML file, for the same reason judge keys are not: a config file gets
+    committed and shared, and a key in it is a key leaked.
+    """
+
+    url: str = ""
+    machine: str = ""
+    api_key: str = ""
+    batch_size: int = 200
+    timeout: float = 5.0
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.url and self.api_key)
+
+    @property
+    def machine_id(self) -> str:
+        if self.machine:
+            return self.machine
+        import socket
+
+        return socket.gethostname() or "unknown-machine"
+
+
+@dataclass
 class Config:
     constitution_path: str = "trustgate.constitution.yaml"
     audit_path: str = field(default_factory=lambda: str(DEFAULT_HOME / "audit.jsonl"))
     judge: JudgeConfig = field(default_factory=JudgeConfig)
     approval: ApprovalConfig = field(default_factory=ApprovalConfig)
+    cloud: CloudConfig = field(default_factory=CloudConfig)
     verbose: bool = False
 
     @classmethod
@@ -137,6 +167,16 @@ class Config:
             self.judge.timeout = float(judge.get("timeout", self.judge.timeout))
             self.judge.enabled = bool(judge.get("enabled", self.judge.enabled))
 
+        cloud = data.get("cloud", {})
+        if isinstance(cloud, dict):
+            self.cloud.url = str(cloud.get("url", self.cloud.url)).rstrip("/")
+            self.cloud.machine = str(cloud.get("machine", self.cloud.machine))
+            try:
+                self.cloud.batch_size = int(cloud.get("batch_size", self.cloud.batch_size))
+                self.cloud.timeout = float(cloud.get("timeout", self.cloud.timeout))
+            except (TypeError, ValueError):
+                pass
+
         approval = data.get("approval", {})
         if isinstance(approval, dict):
             self.approval.mode = approval.get("mode", self.approval.mode)
@@ -160,6 +200,10 @@ class Config:
             self.judge.enabled = False
         if env.get("TRUSTGATE_VERBOSE", "").lower() in ("1", "true", "yes"):
             self.verbose = True
+
+        self.cloud.url = env.get("TRUSTGATE_CLOUD_URL", self.cloud.url).rstrip("/")
+        self.cloud.machine = env.get("TRUSTGATE_CLOUD_MACHINE", self.cloud.machine)
+        self.cloud.api_key = env.get("TRUSTGATE_CLOUD_KEY", "")
 
         self.approval.mode = env.get("TRUSTGATE_APPROVAL_MODE", self.approval.mode)
         self.approval.on_timeout = env.get(

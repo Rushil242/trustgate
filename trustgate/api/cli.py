@@ -215,6 +215,52 @@ def cmd_evidence(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_sync(args: argparse.Namespace) -> int:
+    """Ship this machine's ledger to TrustGate Cloud.
+
+    Safe to run as often as you like, from cron or a loop: it only sends what
+    the cloud does not have yet. Exits 2 if the cloud refused the history,
+    which is not a network problem and should not be retried blindly.
+    """
+    import time
+
+    from trustgate.core import sync
+    from trustgate.core.audit import AuditLedger
+    from trustgate.core.config import Config
+
+    cfg = Config.load()
+    if args.audit:
+        cfg.audit_path = args.audit
+    if not cfg.cloud.url:
+        print("error: no cloud configured. Set TRUSTGATE_CLOUD_URL, or [cloud] url "
+              "in ~/.trustgate/config.toml", file=sys.stderr)
+        return EXIT_ERROR
+    if not cfg.cloud.api_key:
+        print("error: no API key. Set TRUSTGATE_CLOUD_KEY in the environment "
+              "(keys are never read from the config file)", file=sys.stderr)
+        return EXIT_ERROR
+
+    ledger = AuditLedger(cfg.audit_path)
+    while True:
+        res = sync.push(ledger, cfg.cloud.url, cfg.cloud.api_key, cfg.cloud.machine_id,
+                        cfg.cloud.batch_size, cfg.cloud.timeout)
+        if res.rejected:
+            print(f"REFUSED  {res.error}", file=sys.stderr)
+            print("         the cloud holds lines this machine's ledger no longer "
+                  "agrees with. Investigate before doing anything else.", file=sys.stderr)
+            return EXIT_DENIED
+        if res.error:
+            print(f"warning: {res.error} (will retry)", file=sys.stderr)
+        elif res.sent:
+            print(f"sent {res.sent} entr{'y' if res.sent == 1 else 'ies'}, "
+                  f"cloud is up to seq {res.up_to_seq} for {cfg.cloud.machine_id}")
+        elif not args.watch:
+            print(f"OK  nothing new, cloud is up to seq {res.up_to_seq}")
+        if not args.watch:
+            return EXIT_OK if res.ok else EXIT_ERROR
+        time.sleep(args.watch)
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     from pathlib import Path
 
@@ -412,6 +458,12 @@ def build_parser() -> argparse.ArgumentParser:
         "-o", "--out", default="trustgate-evidence.html", help="file to write"
     )
     p_evidence.set_defaults(func=cmd_evidence)
+
+    p_sync = sub.add_parser("sync", help="ship this machine's ledger to TrustGate Cloud")
+    p_sync.add_argument("-a", "--audit", help="path to the audit ledger JSONL")
+    p_sync.add_argument("--watch", type=float, metavar="SECONDS",
+                        help="keep running, syncing every N seconds")
+    p_sync.set_defaults(func=cmd_sync)
 
     p_pending = sub.add_parser(
         "pending", help="list escalations that no human has answered"

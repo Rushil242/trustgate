@@ -204,8 +204,17 @@ def _await_remote_decision(decision: Decision, cfg) -> dict[str, Any]:
     from trustgate.core.audit import AuditLedger
 
     try:
+        ledger = AuditLedger(cfg.audit_path)
+        source = ledger
+        if getattr(cfg, "cloud", None) is not None and cfg.cloud.enabled:
+            # Fleet mode: the escalation is pushed to the cloud and a reviewer
+            # anywhere can answer it. Falls back to waiting on nothing if the
+            # cloud is unreachable, which expires into a refusal.
+            from trustgate.core.sync import CloudResolutions
+
+            source = CloudResolutions(cfg.cloud, ledger)
         result = wait_for_decision(
-            AuditLedger(cfg.audit_path),
+            source,
             decision.request_id,
             timeout=cfg.approval.timeout,
             poll_interval=cfg.approval.poll_interval,

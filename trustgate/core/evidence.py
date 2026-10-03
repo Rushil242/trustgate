@@ -152,24 +152,51 @@ def build(
     start: float | None = None,
     end: float | None = None,
 ) -> EvidencePack:
-    """Read the ledger once and count everything the report needs.
+    """Read one local ledger once and count everything the report needs."""
+    verify = ledger.verify()
+    return build_from_entries(
+        ledger.read_all(),
+        chain_ok=bool(verify.ok),
+        chain_detail=verify.detail,
+        chain_entries=verify.entries_checked,
+        source=str(ledger.path),
+        constitution=constitution,
+        start=start,
+        end=end,
+    )
+
+
+def build_from_entries(
+    entries: list[dict],
+    *,
+    chain_ok: bool,
+    chain_detail: str,
+    chain_entries: int,
+    source: str,
+    constitution: Constitution | None = None,
+    start: float | None = None,
+    end: float | None = None,
+) -> EvidencePack:
+    """Count a pack from entries that may come from many machines.
+
+    The caller is responsible for the chain verdict, because only the caller
+    knows how the entries were verified: one local file re-hashed on the spot,
+    or many machines' chains each checked by the cloud as they arrived.
 
     Resolutions are matched to their decision regardless of period. An answer
     given on Tuesday to a Monday escalation belongs with the Monday action, and
     dropping it because it fell outside the window would turn an answered
-    escalation into an apparently abandoned one.
+    escalation into an apparently abandoned one. Where a request has more than
+    one resolution, one that held the action wins over one recorded afterwards.
     """
-    entries = ledger.read_all()
-    verify = ledger.verify()
-
     pack = EvidencePack(
         generated_at=datetime.now(tz=UTC).timestamp(),
         period_from=start,
         period_to=end,
-        ledger_path=str(ledger.path),
-        chain_ok=bool(verify.ok),
-        chain_detail=verify.detail,
-        chain_entries=verify.entries_checked,
+        ledger_path=source,
+        chain_ok=chain_ok,
+        chain_detail=chain_detail,
+        chain_entries=chain_entries,
     )
 
     if constitution is not None:
@@ -187,8 +214,12 @@ def build(
 
     resolutions: dict[str, dict] = {}
     for entry in entries:
-        if entry.get("kind") == "resolution":
-            resolutions[entry.get("request_id", "")] = entry
+        if entry.get("kind") != "resolution":
+            continue
+        rid = entry.get("request_id", "")
+        current = resolutions.get(rid)
+        if current is None or (entry.get("gated") and not current.get("gated")):
+            resolutions[rid] = entry
 
     for entry in entries:
         if entry.get("kind") == "resolution":
