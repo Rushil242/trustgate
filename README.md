@@ -23,6 +23,13 @@ Works with Claude Code today. Same engine governs voice agents.
 
 </div>
 
+### Watch the 77-second overview
+
+https://github.com/user-attachments/assets/e208a8e8-d030-4069-bbc8-101ef33abf80
+
+<sub>What TrustGate does, how the approval inbox works, how the cloud catches a rewritten log, and what the evidence pack looks like. The people and numbers in it are sample data.</sub>
+
+
 ---
 
 ## The problem
