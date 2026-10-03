@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from trustgate import __version__
 from trustgate.core.audit import AuditLedger
 from trustgate.core.config import Config
 from trustgate.core.constitution import Constitution, ConstitutionError
@@ -67,7 +68,7 @@ def build_app(config: Config | None = None) -> FastAPI:
 
     app = FastAPI(
         title="TrustGate Decision API",
-        version="0.1.0",
+        version=__version__,
         description="Policy Decision Point for AI agent actions.",
         lifespan=lifespan,
     )

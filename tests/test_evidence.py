@@ -195,6 +195,7 @@ class TestRendering:
         assert "priya" in text
         assert "denied" in text
         assert "What this does not prove" in text
+        assert "Escalated: 1" in text and "Escalateed" not in text
 
     def test_json_form_is_machine_readable(self, ledger):
         import json

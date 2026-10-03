@@ -1,0 +1,56 @@
+name: Security review request
+description: A customer's security review is asking what your AI agent is allowed to do, and you need an answer.
+title: "[security review] "
+labels: ["security-review"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is for teams whose deal, pilot or renewal is waiting on the AI section of a customer's security questionnaire.
+
+        **Do not paste anything confidential here.** Issues are public. Describe the situation in general terms and we will take the details somewhere private.
+  - type: dropdown
+    id: agent
+    attributes:
+      label: What kind of agent is under review?
+      options:
+        - Coding agent (Claude Code, Cursor, Copilot, etc.)
+        - Voice agent
+        - Support or chat agent with tool access
+        - Internal workflow or ops agent
+        - Something else
+    validations:
+      required: true
+  - type: dropdown
+    id: buyer
+    attributes:
+      label: Who is asking?
+      options:
+        - Bank or lender
+        - Hospital, clinic or health insurer
+        - Insurance
+        - Other enterprise
+        - Our own security or compliance team
+    validations:
+      required: true
+  - type: textarea
+    id: questions
+    attributes:
+      label: What are they asking for?
+      description: Paraphrase the questions on the AI section, without naming the customer.
+      placeholder: "e.g. Show what the agent is allowed to do. Show who approved risky actions. Prove the log has not been altered."
+    validations:
+      required: true
+  - type: dropdown
+    id: timeline
+    attributes:
+      label: How soon do you need an answer?
+      options:
+        - This week
+        - This month
+        - No fixed date
+  - type: input
+    id: contact
+    attributes:
+      label: Where can we reach you privately? (optional)
+      description: An email or a LinkedIn profile. Leave blank and we will reply on this issue.

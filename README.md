@@ -8,7 +8,7 @@
 [![CI](https://github.com/Rushil242/trustgate/actions/workflows/ci.yml/badge.svg)](https://github.com/Rushil242/trustgate/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-380%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-389%20passing-brightgreen.svg)](tests/)
 [![Attacks blocked](https://img.shields.io/badge/red--team-41%2F41%20handled-brightgreen.svg)](redteam/)
 [![False positives](https://img.shields.io/badge/false%20positives-0%2F24-brightgreen.svg)](redteam/)
 
@@ -19,7 +19,7 @@ Works with Claude Code today. Same engine governs voice agents.
 **[See an attack get stopped, live &rarr;](https://trustgate.rushil-cv26.workers.dev)**<br>
 <sub>A support agent, a prompt injection, and the same call run twice: once with a gate in front of the tool, once without.</sub>
 
-[Live demo](https://trustgate.rushil-cv26.workers.dev) · [Quick start](#quick-start) · [Evidence pack](#evidence-pack) · [How it works](#how-it-works) · [Benchmarks](#benchmarks) · [Threat model](docs/THREAT_MODEL.md) · [Limitations](#what-this-does-not-do)
+[Live demo](https://trustgate.rushil-cv26.workers.dev) · [Quick start](#quick-start) · [Evidence pack](#evidence-pack) · [TrustGate Cloud](#trustgate-cloud) · [How it works](#how-it-works) · [Benchmarks](#benchmarks) · [Threat model](docs/THREAT_MODEL.md) · [Limitations](#what-this-does-not-do)
 
 </div>
 
@@ -216,7 +216,9 @@ uv run trustgate serve
 
 ![TrustGate audit console — live feed of allow/block/escalate/modify decisions with chain verification](docs/img/dashboard.png)
 
-It's a single static HTML file reading `GET /v1/audit` — no build step, no framework, nothing leaves your machine. The console shows you *that* something was escalated and *why*; a browser-based approve/deny queue is a fast-follow.
+It's a single static HTML file reading `GET /v1/audit` — no build step, no framework, nothing leaves your machine. Click an escalated action and a named reviewer can approve or deny it; the decision goes into the same hash chain.
+
+Two kinds of approval are recorded differently, on purpose. With `TRUSTGATE_APPROVAL_MODE=remote` the gate **holds the action** until someone answers, and silence after the window expires into a refusal. Without it, a decision in the console is a review **recorded afterwards**. The log and the evidence pack never let the two look the same.
 
 Escalations do record how they ended. TrustGate watches Claude Code's `PostToolUse`, `PostToolUseFailure` and `PermissionDenied` events and appends a `resolution` entry into the same hash chain, so the log carries the answer as well as the question:
 
@@ -268,6 +270,58 @@ having will read it that way.
 Nothing in the pack is estimated. Every figure is a count of entries written at
 the moment each action was proposed.
 
+**[See a real one &rarr;](docs/sample/evidence-pack.md)** generated from a Claude
+Code session by the command above, with nothing edited by hand. It includes an
+escalation nobody answered, because that is what a real record looks like.
+
+---
+
+## TrustGate Cloud
+
+Everything above runs on your own machine and stays free. It has one limit we
+would rather state than hide:
+
+```console
+$ rm .trustgate/audit.jsonl          # wipe the log, then replay a cleaner history
+$ trustgate verify-audit
+OK  chain intact — 3 entries verified
+```
+
+A shorter chain rebuilt from the start is still a valid chain. A record kept on
+your own disk proves it was not *edited*. It cannot prove it was not *replaced*.
+For your own engineering that rarely matters. For a customer's security team
+deciding whether to trust your record, it is the whole question.
+
+TrustGate Cloud holds a copy somewhere you cannot reach:
+
+```console
+$ trustgate sync
+REFUSED  history rewritten on api-1: seq 0 differs from the line already received.
+```
+
+| | Free, local | TrustGate Cloud |
+|---|---|---|
+| Decisions, guards, policy, hash-chained log | yes | yes |
+| Evidence pack | one machine | every machine, one document |
+| Detects a log that was edited | yes | yes |
+| Detects a log that was wiped and replaced | **no** | **yes** |
+| Approval queue | one machine | one inbox for the whole fleet; approve once, the waiting agent on any machine continues |
+| Who approved | whoever is at the keyboard | a named reviewer, recorded under their own key |
+
+Connecting a machine is two environment variables. Nothing changes in the
+engine, and a slow or unreachable cloud never slows the agent: entries queue on
+disk and go out later.
+
+```bash
+export TRUSTGATE_CLOUD_URL=https://...
+export TRUSTGATE_CLOUD_KEY=tgk_...     # read from the environment only, never a config file
+trustgate sync --watch 30
+```
+
+**TrustGate Cloud is in early access.** There is no self-serve signup yet; it is
+set up directly with a small number of teams. If a customer's security review
+is holding up one of your deals, **[open a security review request](https://github.com/Rushil242/trustgate/issues/new?template=security_review.yml)**.
+
 ---
 
 ## Benchmarks
@@ -289,7 +343,7 @@ Stated plainly, because a security tool vague about its limits is worse than one
 
 - **The 100% is measured against attacks I wrote myself.** That biases it upward. It means the known attack classes are covered — not that the gate is unbypassable. [Independent red-teaming](SECURITY.md) is the most valuable contribution anyone can make here.
 - **A compromised host is out of scope.** Anyone who can edit TrustGate's code, policy or ledger has already won.
-- **Tamper-evident, not tamper-proof.** Someone who can rewrite the whole log can rebuild the chain. Detecting that needs an external anchor.
+- **Tamper-evident, not tamper-proof.** Someone who can rewrite the whole log can rebuild the chain. Detecting that needs a copy held elsewhere, which is what [TrustGate Cloud](#trustgate-cloud) is.
 - **Secret detection is a denylist**, incomplete by construction.
 - **Multi-turn attacks aren't modelled.** Each action is judged on its own.
 - **No rate limiting.**
@@ -309,15 +363,15 @@ Stated plainly, because a security tool vague about its limits is worse than one
 
 ## Open core
 
-**Free and MIT forever:** the engine, all five guards, the constitution format, both adapters, local tamper-evident audit, the CLI, the HTTP daemon, Docker, and the red-team suite. Everything that helps one developer.
+**Free and MIT forever:** the engine, all five guards, the constitution format, both adapters, local tamper-evident audit, the evidence pack, the approval console, the `trustgate sync` client, the CLI, the HTTP daemon, Docker, and the red-team suite. Everything that helps one developer.
 
 The line is drawn on one question: **can it run on your own machine and help one person?** If yes, it is free, and that includes the evidence pack.
 
-**Paid:** anything that has to be always on, shared across a team, or held somewhere the person being audited cannot reach. Hosted immutable audit with SIEM export, a browser approval queue that holds actions across a fleet, SSO and RBAC, and industry policy packs.
+**Paid (TrustGate Cloud):** anything that has to be always on, shared across a team, or held somewhere the person being audited cannot reach. Today that is append-only custody of every machine's log, detection of replaced logs, a fleet approval inbox with named reviewers, and a fleet-wide evidence pack. Planned: SIEM export, SSO and RBAC, and industry policy packs.
 
 The custody point is the honest reason the hosted version exists, and it is worth saying plainly: a record you keep on your own disk proves it was not *edited*, because the hash chain says so. It does not prove it was not *deleted*. For your own engineering that distinction rarely matters. For a reviewer deciding whether to trust your record, it is the whole question.
 
-**Stuck in a customer's security review right now?** That is the problem this was built around. **[Open an issue](https://github.com/Rushil242/trustgate/issues/new/choose)** or start a [discussion](https://github.com/Rushil242/trustgate/discussions).
+**Stuck in a customer's security review right now?** That is the problem this was built around. **[Open a security review request](https://github.com/Rushil242/trustgate/issues/new?template=security_review.yml)** or start a [discussion](https://github.com/Rushil242/trustgate/discussions).
 
 ---
 
@@ -326,7 +380,7 @@ The custody point is the honest reason the hosted version exists, and it is wort
 Bypasses are the most useful contribution. Every accepted one becomes a permanent regression case in the suite before the fix merges — see [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
 ```bash
-uv run pytest        # 380 tests
+uv run pytest        # 389 tests
 uv run ruff check .
 uv run trustgate test
 ```

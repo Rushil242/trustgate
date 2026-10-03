@@ -296,9 +296,11 @@ def to_markdown(pack: EvidencePack) -> str:
 
     w("## Summary\n")
     w(f"- Actions checked: **{pack.decisions}**")
-    for name in ("allow", "block", "escalate", "modify"):
+    labels = {"allow": "Allowed", "block": "Blocked", "escalate": "Escalated",
+              "modify": "Modified"}
+    for name, label in labels.items():
         if pack.effects.get(name):
-            w(f"- {name.capitalize()}ed: {pack.effects[name]}")
+            w(f"- {label}: {pack.effects[name]}")
     w(f"- Escalations answered by a person: {pack.answered} of {len(pack.escalations)}")
     w(
         f"- Record integrity: **{'intact' if pack.chain_ok else 'FAILED'}** "
