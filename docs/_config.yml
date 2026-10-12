@@ -3,3 +3,5 @@ description: Deterministic policy enforcement and a tamper-evident audit log for
 theme: minima
 plugins:
   - jekyll-seo-tag
+header_pages:
+  - blog/index.md
