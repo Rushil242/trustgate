@@ -1,0 +1,5 @@
+title: TrustGate
+description: Deterministic policy enforcement and a tamper-evident audit log for AI agents.
+theme: minima
+plugins:
+  - jekyll-seo-tag
