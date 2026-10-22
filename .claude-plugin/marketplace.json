@@ -1,0 +1,12 @@
+{
+  "name": "trustgate",
+  "owner": { "name": "Rushil242", "url": "https://github.com/Rushil242" },
+  "description": "TrustGate: open-source guardrails for AI agents.",
+  "plugins": [
+    {
+      "name": "trustgate",
+      "source": "./plugins/trustgate",
+      "description": "Checks every Claude Code tool call against plain-English rules before it runs, and keeps a tamper-evident record."
+    }
+  ]
+}

@@ -7,6 +7,35 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Break TrustGate challenge** (`CHALLENGE.md`): rules, scope, Hall of Fame
+  and scoreboard for outside attempts to get an action past the default rules.
+- **One-file community attacks** in `redteam/community/`. `trustgate test`
+  loads every file for the surface being tested, lists an outside attack that
+  gets through under "BYPASS FOUND" with its author, and marks it as a
+  "Bypass found" error on GitHub pull requests. A malformed file is reported by
+  name instead of crashing. New flags: `--community-dir`, `--no-community`.
+- **"I broke it" issue form** for bypass reports.
+- **Claude Code plugin** in `plugins/trustgate/`, with a marketplace file at
+  `.claude-plugin/marketplace.json`. Installs the engine on first session start
+  and asks about every action until the install works, so it never fails open.
+
+### Changed
+
+- `SECURITY.md` now separates public findings (gaps in the default rules, via
+  the challenge) from private ones (failing open, crashes, secrets in the log,
+  undetected log edits).
+- Every mention of the 41/41 red-team result says it is self-measured.
+- The CHANGELOG and README no longer describe TrustGate Cloud as hosted. It is
+  built and runs locally, and is set up directly with each team in early access.
+
+### Fixed
+
+- The README claimed `echo ".env" >> .gitignore` is allowed. It is blocked by
+  the starter `protect-secrets` rule; the README now says so as a known false
+  positive.
+
 ## [0.2.0] — 2026-10-03
 
 The release where TrustGate stops being only a gate and starts producing the
@@ -15,8 +44,10 @@ customer's security team asks what your AI agent is allowed to do.
 
 ### Added
 
-- **`trustgate sync`** — ships the local ledger to TrustGate Cloud, the hosted
-  custody service. Reads the ledger file rather than hooking the engine, so a
+- **`trustgate sync`** — ships the local ledger to TrustGate Cloud, a separate
+  store for a copy of the log. The cloud is built and runs locally today; it is
+  not a hosted service yet, and is set up directly with each team in early
+  access. Reads the ledger file rather than hooking the engine, so a
   slow or unreachable cloud never slows an agent; entries queue on disk. Stdlib
   only. The API key is read from `TRUSTGATE_CLOUD_KEY` and never from a config
   file. A refused history exits 2 and is never retried blindly.

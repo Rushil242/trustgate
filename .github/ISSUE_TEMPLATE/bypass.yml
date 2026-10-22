@@ -1,0 +1,68 @@
+name: I broke it
+description: An action the default rules should stop got through (Break TrustGate challenge)
+title: "Bypass: "
+labels: ["bypass", "break-trustgate"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying to break it. The rules are in [CHALLENGE.md](https://github.com/Rushil242/trustgate/blob/main/CHALLENGE.md).
+
+        **Stop here if your finding makes TrustGate fail open for everyone, crash, leak secrets into the log, or lets the log be edited unnoticed.** Report those privately instead: Security tab, then "Report a vulnerability".
+
+        A pull request adding one file to `redteam/community/` is even better than this form, because CI checks it straight away.
+  - type: textarea
+    id: payload
+    attributes:
+      label: The payload
+      description: The exact command or tool call the agent made. For a voice agent, the tool name and its parameters.
+      placeholder: "python3 -c \"print(open('.e'+'nv').read())\""
+      render: shell
+    validations: { required: true }
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which default policy?
+      options:
+        - starter.coding.yaml (coding agent)
+        - starter.voice.yaml (voice or support agent)
+    validations: { required: true }
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What did the agent do?
+      description: What the action does, in one or two lines. Why should it have been stopped?
+    validations: { required: true }
+  - type: dropdown
+    id: expected
+    attributes:
+      label: Expected verdict
+      options:
+        - block
+        - escalate
+    validations: { required: true }
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual verdict
+      description: "Output of `trustgate check`, or of `trustgate test` with your attack as a file in redteam/community/."
+      render: shell
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes:
+      label: TrustGate version or commit
+      placeholder: "trustgate --version, or a commit hash"
+    validations: { required: true }
+  - type: input
+    id: handle
+    attributes:
+      label: Name for the Hall of Fame
+      description: Your GitHub handle by default. Write "anonymous" if you would rather not be named.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: This does not need host access, a policy edit or a ledger edit.
+          required: true

@@ -183,7 +183,10 @@ than one with narrow, honest ones.
   current context. An attacker who builds up state across many innocuous-looking
   turns is not modeled.
 - **Encrypted or obfuscated payloads.** A base64-encoded destructive command
-  decoded and executed in one shell pipeline may evade pattern matching.
+  decoded and executed in one shell pipeline may evade pattern matching. This
+  is a known weak spot rather than something we decline to fix, so new
+  obfuscations count as findings in the [Break TrustGate](../CHALLENGE.md)
+  challenge.
 
 ## 6. TrustGate as an attack surface
 

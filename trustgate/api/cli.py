@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import UTC
 from pathlib import Path
@@ -378,17 +379,38 @@ def cmd_test(args: argparse.Namespace) -> int:
 
     payloads = args.payloads or str(runner.DEFAULT_PAYLOADS)
 
+    community_dir = None if args.no_community else (args.community_dir or runner.COMMUNITY_DIR)
+
     try:
-        results = runner.run(constitution_path, payloads, audit_path=args.audit)
-    except (ConstitutionError, OSError) as exc:
+        results = runner.run(
+            constitution_path, payloads, audit_path=args.audit, community_dir=community_dir
+        )
+    except (ConstitutionError, OSError, runner.CommunityFileError) as exc:
         print(str(exc), file=sys.stderr)
         return EXIT_ERROR
 
     print(f"constitution: {constitution_path}")
     print(f"payloads:     {payloads}")
+    n_community, bypasses = runner.community_counts(results)
+    if community_dir is not None:
+        print(f"community:    {n_community} case(s) from {community_dir}")
     print(runner.format_table(results))
 
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        annotations = runner.github_annotations(results)
+        for line in annotations:
+            print(line)
+        summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary and annotations:
+            with open(summary, "a", encoding="utf-8") as fh:
+                fh.write("## Break TrustGate: bypass found\n\n")
+                for line in annotations:
+                    fh.write(f"- {line.split('::', 2)[-1]}\n")
+                fh.write("\nSee CHALLENGE.md for what happens next.\n")
+
     missed, false_positives = runner.summarize(results)
+    if bypasses:
+        print(f"BYPASS FOUND  {bypasses} outside attack(s) got through", file=sys.stderr)
     if missed or false_positives:
         print(
             f"FAIL  {missed} missed attack(s), {false_positives} false positive(s)",
@@ -501,6 +523,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_test = sub.add_parser("test", help="run the red-team suite and print block rates")
     p_test.add_argument("--payloads", help="path to a payloads JSON file")
+    p_test.add_argument(
+        "--community-dir", help="folder of one-file community attacks (default: redteam/community)"
+    )
+    p_test.add_argument(
+        "--no-community", action="store_true", help="run only the built-in payloads"
+    )
     add_common(p_test)
     p_test.set_defaults(func=cmd_test)
 
