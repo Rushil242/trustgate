@@ -42,7 +42,7 @@ _OPERATORS = re.compile(
 )
 
 # Keys whose values are paths in the tool schemas adapters map from.
-_PATH_PARAM_KEYS = frozenset(
+PATH_PARAM_KEYS = frozenset(
     {
         "file_path",
         "filepath",
@@ -147,7 +147,7 @@ def extract_paths(action_type: str, tool: str, params: dict, raw: str) -> list[s
     for key, value in (params or {}).items():
         if not isinstance(value, str) or not value:
             continue
-        if key.lower() in _PATH_PARAM_KEYS or _looks_like_path(value):
+        if key.lower() in PATH_PARAM_KEYS or _looks_like_path(value):
             paths.append(normalize_path(value))
 
     if action_type == "shell" or tool.lower() in ("bash", "shell", "sh", "run"):

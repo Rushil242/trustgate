@@ -23,7 +23,10 @@ Spec: Master Build Document v3.0, Part E.2.
 
 from __future__ import annotations
 
+import os
 import re
+import sys
+from pathlib import Path
 
 from trustgate.core.guards import BaseGuard
 from trustgate.core.models import (
@@ -36,6 +39,7 @@ from trustgate.core.models import (
     effect_to_verdict,
 )
 from trustgate.core.normalize import (
+    PATH_PARAM_KEYS,
     extract_paths,
     invoked_utilities,
     is_dangerous_delete,
@@ -85,6 +89,85 @@ SECRET_PATH_GLOBS: tuple[str, ...] = (
 # shell_tokens, but matching the operator directly catches the case where the
 # consuming program is a shell builtin we do not list.
 _READ_REDIRECT = re.compile(r"<\s*([^\s;|&<>()]+)")
+
+
+# TrustGate's own files. Text markers rather than globs, matched
+# case-insensitively anywhere in the action, because the attacks on these files
+# arrive in every spelling: `cd .claude/hooks && printf ... > x`, a Python
+# one-liner that opens `~/.trustgate/config.toml`, a `mv` of settings.json.
+SELF_MARKERS: tuple[str, ...] = (
+    ".trustgate",               # ~/.trustgate/ (config, ledger, pins) and project .trustgate/
+    "trustgate.constitution",   # the policy file
+    "trustgate-pretooluse",     # the hook scripts
+    "trustgate-resolution",
+    "pinned-policies",
+    "plugins/data/trustgate",   # the plugin's own venv
+    ".claude/settings",         # what decides whether the hook runs at all
+    ".claude/hooks",
+)
+
+# CLI subcommands that change what the gate trusts. A person runs these; an
+# agent running them is approving itself.
+SELF_APPROVING_COMMANDS: frozenset[str] = frozenset({"approve", "pin-policy", "init"})
+
+
+def _self_markers(policy_source: str) -> list[str]:
+    markers = list(SELF_MARKERS)
+    home = os.environ.get("TRUSTGATE_HOME")
+    if home:
+        markers.append(home)
+    if policy_source:
+        markers += [policy_source, Path(policy_source).name]
+    if sys.prefix != sys.base_prefix:  # running from a venv: its files are the gate
+        markers.append(sys.prefix)
+    return [m.lower() for m in markers if m]
+
+
+def touches_trustgate(req: ActionRequest, policy_source: str = "") -> str:
+    """What part of TrustGate itself this action could change, or "".
+
+    Built in, not policy: a gate whose own files are writable by the thing it
+    gates is only a suggestion, and the policy file is one of those files. So
+    no policy can switch this off. Reads by structured file tools are allowed
+    (reading the ledger is how a person checks it); everything else that names
+    these files goes to a person. This is a speed bump until Phase 1 moves the
+    gate to its own OS user, where the operating system enforces it instead.
+    """
+    if req.action.type is ActionType.file_read:
+        return ""
+
+    if req.action.type is ActionType.shell:
+        text = req.action.raw or str(req.action.params.get("command", ""))
+    else:
+        # Paths only. The content of a file being written may mention these
+        # names (a README about installing hooks) without touching them.
+        text = "\n".join(
+            str(v) for k, v in (req.action.params or {}).items()
+            if k.lower() in PATH_PARAM_KEYS and isinstance(v, str)
+        )
+        if req.action.type is ActionType.file_write:
+            text += "\n" + (req.action.raw or "")  # the hook puts the target path here
+    text = text.lower()
+    for marker in _self_markers(policy_source):
+        if marker in text:
+            return marker
+
+    if req.action.type is ActionType.shell:
+        tokens = shell_tokens(req.action.raw or str(req.action.params.get("command", "")))
+        for i, token in enumerate(tokens):
+            name = token.rstrip("/").rsplit("/", 1)[-1].lower()
+            if name == ".claude":
+                # `cd .claude && mv settings.json x`: the folder that decides
+                # whether this hook runs, reached in two steps.
+                return ".claude"
+            if name == "trustgate" and i + 1 < len(tokens):
+                if tokens[i + 1].lower() in SELF_APPROVING_COMMANDS:
+                    return f"trustgate {tokens[i + 1]}"
+            if name in ("kill", "pkill", "killall") and any(
+                "trustgate" in t.lower() for t in tokens[i + 1 :]
+            ):
+                return "a TrustGate process"
+    return ""
 
 
 def _is_protected(candidate: str) -> bool:
@@ -186,6 +269,21 @@ class ActionGuard(BaseGuard):
                 verdict = combine_verdicts(verdict, effect_to_verdict(principle.effect))
 
         verdict, reasons = self._apply_builtins(req, verdict, reasons)
+
+        hit = touches_trustgate(req, getattr(self.c, "source", ""))
+        if hit:
+            reasons.append(
+                Reason(
+                    guard=self.name,
+                    rule_id="protect-trustgate",
+                    message=(
+                        "Built-in rule: actions that could change TrustGate itself (its "
+                        f"policy, log, hooks, settings or install) need a person ({hit})"
+                    ),
+                    severity="critical",
+                )
+            )
+            verdict = combine_verdicts(verdict, Verdict.escalate)
         return GuardResult(verdict=verdict, reasons=reasons)
 
     def _apply_builtins(

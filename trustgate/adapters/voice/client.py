@@ -90,7 +90,7 @@ def build_default_client() -> DecisionClient:
     constitution = Constitution.from_file(cfg.constitution_path)
 
     judge = None
-    if cfg.judge.enabled:
+    if cfg.judge.active:
         from trustgate.core.guards.constitution_llm import ConstitutionGuard
         from trustgate.core.llm import build_llm
 

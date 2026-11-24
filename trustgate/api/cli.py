@@ -43,7 +43,7 @@ def _load_engine(args: argparse.Namespace):
     constitution = Constitution.from_file(cfg.constitution_path)
 
     judge = None
-    if cfg.judge.enabled:
+    if cfg.judge.active:
         from trustgate.core.guards.constitution_llm import ConstitutionGuard
         from trustgate.core.llm import build_llm
 
@@ -300,6 +300,45 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_pin_policy(args: argparse.Namespace) -> int:
+    """Approve the exact bytes of a policy file, so the hook will trust it."""
+    from trustgate.core.config import Config
+    from trustgate.core.constitution import Constitution, ConstitutionError
+    from trustgate.core.pins import is_trusted, load_pins, pin, pins_path
+
+    if args.list:
+        pins = load_pins()
+        if not pins:
+            print(f"no pinned policies in {pins_path()}")
+        for digest, info in pins.items():
+            print(f"{digest}  {info.get('path', '')}")
+        return EXIT_OK
+
+    path = Path(args.path or Config.load().constitution_path)
+    try:
+        constitution = Constitution.from_file(path)
+    except ConstitutionError as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_ERROR
+
+    if is_trusted(constitution.digest):
+        print(f"already trusted: {path}\n  {constitution.digest}")
+        return EXIT_OK
+
+    print(f"policy:     {path}")
+    print(f"name:       {constitution.metadata.name}")
+    print(f"principles: {len(constitution.principles)}")
+    print(f"hash:       {constitution.digest}")
+    if not args.yes:
+        print("Read the file first. Pin these exact bytes? [y/N] ", end="", flush=True)
+        if sys.stdin.readline().strip().lower() not in ("y", "yes"):
+            print("not pinned")
+            return EXIT_DENIED
+    pin(path, note=args.note or "")
+    print(f"pinned in {pins_path()}")
+    return EXIT_OK
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     """Install the agent hook and a starter constitution into a project."""
     from trustgate.adapters.coding.install import install, next_steps
@@ -510,6 +549,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--force", action="store_true", help="overwrite an existing constitution"
     )
     p_init.set_defaults(func=cmd_init)
+
+    p_pin = sub.add_parser(
+        "pin-policy", help="approve the exact bytes of a policy file so the hook trusts it"
+    )
+    p_pin.add_argument("path", nargs="?", help="policy file (default: the configured one)")
+    p_pin.add_argument("-y", "--yes", action="store_true", help="skip confirmation")
+    p_pin.add_argument("--note", help="why this change was made")
+    p_pin.add_argument("--list", action="store_true", help="show pinned policies")
+    p_pin.set_defaults(func=cmd_pin_policy)
 
     p_approve = sub.add_parser(
         "approve", help="record the current hook/MCP configuration as reviewed"

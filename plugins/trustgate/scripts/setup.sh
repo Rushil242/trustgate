@@ -35,7 +35,7 @@ else
     "$PY" -m venv "$VENV" >&2 && "$VENV/bin/pip" install -q "$SPEC" >&2
 fi
 
-if [ -x "$VENV/bin/python" ] && "$VENV/bin/python" -c 'import trustgate' 2>/dev/null; then
+if [ -x "$VENV/bin/python" ] && "$VENV/bin/python" -P -c 'import trustgate' 2>/dev/null; then
     printf '%s' "$SPEC" > "$STAMP"
 else
     echo "TrustGate install failed. Until it works, every action asks for approval." >&2

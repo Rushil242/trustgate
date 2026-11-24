@@ -29,6 +29,11 @@ class JudgeConfig:
     `fake` is the default on purpose: the engine must be runnable, testable and
     red-teamable with no key and no network. A judge is an enhancement to the
     deterministic floor, never a prerequisite for it.
+
+    `fake` means *no judge*. The fake model always answers "no violation", so
+    building a judge from it would turn every "someone should reason about
+    this" into an allow. With no judge, the engine escalates those instead,
+    which is also exactly what the red-team suite measures.
     """
 
     provider: str = "fake"
@@ -37,6 +42,11 @@ class JudgeConfig:
     api_key: str = ""
     timeout: float = 4.0
     enabled: bool = True
+
+    @property
+    def active(self) -> bool:
+        """Whether a real judge should be built: enabled and not `fake`."""
+        return self.enabled and self.provider.lower() not in ("fake", "", "none")
 
     # OpenRouter and Groq are OpenAI-compatible, so they differ only by URL.
     PRESETS: dict[str, dict[str, str]] = field(

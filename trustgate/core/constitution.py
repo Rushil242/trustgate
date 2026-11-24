@@ -233,6 +233,12 @@ class Constitution(BaseModel):
     principles: list[Principle] = Field(default_factory=list)
 
     _digest: str = PrivateAttr(default="")
+    _source: str = PrivateAttr(default="")
+
+    @property
+    def source(self) -> str:
+        """The file this was loaded from, if any. Protected from agent writes."""
+        return self._source
 
     @property
     def digest(self) -> str:
@@ -287,7 +293,9 @@ class Constitution(BaseModel):
             text = path.read_text(encoding="utf-8")
         except OSError as exc:
             raise ConstitutionError(f"cannot read constitution at {path}: {exc}") from exc
-        return cls.from_yaml(text, source=str(path))
+        constitution = cls.from_yaml(text, source=str(path))
+        constitution._source = str(path.resolve())
+        return constitution
 
     @classmethod
     def from_yaml(cls, text: str, source: str = "<string>") -> Constitution:

@@ -44,10 +44,13 @@ class Engine:
         audit: AuditLedger | None = None,
         judge: ConstitutionGuard | None = None,
         guards: list[Guard] | None = None,
+        policy_trusted: bool = True,
     ) -> None:
         self.c = constitution
         self.audit = audit
         self.judge = judge
+        self.policy_trusted = policy_trusted
+        """False when the policy file's hash was never pinned. See core/pins.py."""
         self.det_guards: list[Guard] = guards if guards is not None else [
             ContextGuard(constitution),
             ActionGuard(constitution),
@@ -108,6 +111,23 @@ class Engine:
                         severity="medium",
                     )
                 )
+
+        if not self.policy_trusted and verdict is not Verdict.block:
+            # Rules nobody approved cannot be the reason an action runs. A
+            # block in them still stands; anything else goes to a person.
+            verdict = combine_verdicts(verdict, Verdict.escalate)
+            reasons.append(
+                Reason(
+                    guard="engine",
+                    rule_id="policy-not-pinned",
+                    message=(
+                        "The policy file has changed since it was last approved "
+                        f"({self.c.digest or 'no hash'}). If you made this change, "
+                        "run `trustgate pin-policy` yourself to approve it."
+                    ),
+                    severity="high",
+                )
+            )
 
         effect = verdict_to_effect(verdict)
         if effect is Effect.escalate:

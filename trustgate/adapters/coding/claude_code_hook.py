@@ -281,14 +281,19 @@ def _build_engine(config=None):
     constitution = Constitution.from_file(cfg.constitution_path)
 
     judge = None
-    if cfg.judge.enabled:
+    if cfg.judge.active:
         from trustgate.core.guards.constitution_llm import ConstitutionGuard
         from trustgate.core.llm import build_llm
 
         judge = ConstitutionGuard(constitution, build_llm(cfg.judge))
 
+    from trustgate.core.pins import is_trusted
+
     return Engine(
-        constitution=constitution, audit=AuditLedger(cfg.audit_path), judge=judge
+        constitution=constitution,
+        audit=AuditLedger(cfg.audit_path),
+        judge=judge,
+        policy_trusted=is_trusted(constitution.digest),
     )
 
 
