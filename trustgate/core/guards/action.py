@@ -123,6 +123,11 @@ SELF_MARKERS: tuple[str, ...] = (
     ".claude/hooks",
     "/var/lib/trustgate",       # the guard room's own folders
     "/var/run/trustgate",
+    "/run/trustgate",
+    "application support/trustgate",
+    "application support/claudecode",  # Claude Code managed settings
+    "/etc/claude-code",
+    "/usr/local/lib/trustgate",
     # Environment that the next session's hook will inherit. Setting
     # TRUSTGATE_HOME in ~/.zshrc would point the in-project hook at a pin file
     # the agent wrote. (The guard room's thin hook reads no environment.)
@@ -133,7 +138,9 @@ SELF_MARKERS: tuple[str, ...] = (
 
 # CLI subcommands that change what the gate trusts. A person runs these; an
 # agent running them is approving itself.
-SELF_APPROVING_COMMANDS: frozenset[str] = frozenset({"approve", "pin-policy", "init"})
+SELF_APPROVING_COMMANDS: frozenset[str] = frozenset(
+    {"approve", "pin-policy", "init", "guardroom"}
+)
 
 
 def _self_markers(policy_source: str) -> list[str]:
@@ -185,7 +192,7 @@ def touches_trustgate(req: ActionRequest, policy_source: str = "") -> str:
                 # `cd .claude && mv settings.json x`: the folder that decides
                 # whether this hook runs, reached in two steps.
                 return ".claude"
-            if name == "trustgate" and i + 1 < len(tokens):
+            if name in ("trustgate", "trustgate-admin") and i + 1 < len(tokens):
                 if tokens[i + 1].lower() in SELF_APPROVING_COMMANDS:
                     return f"trustgate {tokens[i + 1]}"
             if name in ("kill", "pkill", "killall") and any(

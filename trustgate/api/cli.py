@@ -355,12 +355,26 @@ def cmd_pin_policy(args: argparse.Namespace) -> int:
 
 
 DEV_GUARDROOM = Path.home() / ".trustgate" / "guardroom"
-PROD_STATE, PROD_RUN = Path("/var/lib/trustgate"), Path("/var/run/trustgate")
+
+
+def prod_dirs(platform: str | None = None) -> tuple[Path, Path]:
+    """Where the guard room lives when it runs as its own OS user.
+
+    macOS clears /var/run at boot and a daemon running as `_trustgate` cannot
+    recreate it, so on macOS both folders sit under Application Support,
+    created once by the installer. On Linux systemd makes /run/trustgate at
+    every start (RuntimeDirectory) and keeps /var/lib/trustgate (StateDirectory).
+    """
+    if (platform or sys.platform) == "darwin":
+        base = Path("/Library/Application Support/TrustGate")
+        return base / "state", base / "run"
+    return Path("/var/lib/trustgate"), Path("/run/trustgate")
 
 
 def _guardroom_dirs(args: argparse.Namespace) -> tuple[Path, Path]:
     if args.prod:
-        return Path(args.state or PROD_STATE), Path(args.run or PROD_RUN)
+        state, run = prod_dirs()
+        return Path(args.state or state), Path(args.run or run)
     return Path(args.state or DEV_GUARDROOM / "state"), Path(args.run or DEV_GUARDROOM / "run")
 
 
@@ -434,6 +448,15 @@ def _install_thin_hook(args: argparse.Namespace, run: Path) -> int:
                for event in ("PostToolUse", "PostToolUseFailure", "PermissionDenied")},
         }
     }
+    if args.prod:
+        # Only hooks from managed settings run, so nothing in a project or the
+        # user's own settings can be added around this one; and nobody can
+        # start a session in bypass-permissions mode.
+        snippet["allowManagedHooksOnly"] = True
+        snippet["permissions"] = {"disableBypassPermissionsMode": "disable"}
+    if args.settings_out:
+        Path(args.settings_out).write_text(json.dumps(snippet, indent=2) + "\n",
+                                           encoding="utf-8")
     print(f"wrote {dest} (socket {run / 'agent.sock'}, fallback {fallback})")
     print("Add this to your Claude Code settings"
           + (" (managed settings, owned by root)" if args.prod else "") + ":")
@@ -679,6 +702,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_gr.add_argument("--dest", default=".claude/hooks/trustgate-guardroom.py",
                       help="install-hook: where to write the thin hook")
     p_gr.add_argument("--python", help="install-hook: python to run it with")
+    p_gr.add_argument("--settings-out",
+                      help="install-hook: also write the Claude Code settings JSON to this file")
     p_gr.set_defaults(func=cmd_guardroom)
 
     p_approve = sub.add_parser(

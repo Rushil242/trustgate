@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  TrustGate guard room, as a system LaunchDaemon running as _trustgate.
+  Installed by deploy/install-guardroom.sh to /Library/LaunchDaemons/.
+  Owned by root, mode 0644, or launchd refuses to load it.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.trustgate.guardroom</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/lib/trustgate/venv/bin/trustgate</string>
+    <string>guardroom</string>
+    <string>serve</string>
+    <string>--prod</string>
+  </array>
+  <key>UserName</key>
+  <string>_trustgate</string>
+  <key>GroupName</key>
+  <string>_trustgate</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- config.toml (approval mode, Cloud URL) is read from the daemon's own folder. -->
+    <key>TRUSTGATE_HOME</key>
+    <string>/Library/Application Support/TrustGate/state</string>
+  </dict>
+  <key>WorkingDirectory</key>
+  <string>/Library/Application Support/TrustGate/state</string>
+  <key>Umask</key>
+  <integer>63</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardErrorPath</key>
+  <string>/Library/Logs/TrustGate/guardroom.log</string>
+  <key>StandardOutPath</key>
+  <string>/Library/Logs/TrustGate/guardroom.log</string>
+</dict>
+</plist>

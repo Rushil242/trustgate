@@ -1,0 +1,33 @@
+# TrustGate guard room, running as its own system user.
+# Installed by deploy/install-guardroom.sh to /etc/systemd/system/.
+[Unit]
+Description=TrustGate guard room (policy decisions and signed audit log for AI agents)
+After=network.target
+
+[Service]
+Type=simple
+User=trustgate
+Group=trustgate
+ExecStart=/usr/local/lib/trustgate/venv/bin/trustgate guardroom serve --prod
+Environment=TRUSTGATE_HOME=/var/lib/trustgate
+StateDirectory=trustgate
+StateDirectoryMode=0700
+RuntimeDirectory=trustgate
+RuntimeDirectoryMode=0755
+UMask=0077
+Restart=always
+RestartSec=1
+
+# The daemon needs its own two folders and nothing else.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/trustgate /run/trustgate
+
+[Install]
+WantedBy=multi-user.target
