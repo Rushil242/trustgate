@@ -7,6 +7,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added (guard room)
+
+- **`trustgated`, the guard room** (`trustgate guardroom serve`): the gate as its
+  own process, owning the policy, the log and a signing key. Two Unix sockets;
+  the OS file mode decides who may approve. See `docs/GUARDROOM.md`.
+- **Thin hook**: standard library only, run with `python -I`, socket path baked
+  in, refuses when the daemon does not answer. A full hook call drops from
+  about 160 ms to about 17 ms.
+- **Signed ledger, version 2**: Ed25519 machine key, integer-only entries, a
+  one-page format (`docs/LEDGER-FORMAT.md`) with fixed test vectors.
+  `trustgate verify-audit --pubkey` checks signatures.
+- **Policy changes are log entries**, with who made them, and the evidence
+  pack lists them. Every decision records its protection level.
+- **Installer for a separate OS user** (`deploy/install-guardroom.sh`) with a
+  LaunchDaemon, a systemd unit and Claude Code managed settings.
+
 ### Security
 
 - **Parallel hooks no longer break the log.** Each write takes a file lock and
