@@ -96,6 +96,9 @@ LIMITS: tuple[str, ...] = (
     "action had already run. They are a judgment, not an authorisation.",
     "Outcomes marked 'unknown' are escalations where the surface did not tell us "
     "clearly what the human decided. They are reported rather than assumed.",
+    "In a pack made from one machine's own ledger, every name in it was written by "
+    "that machine. Only a fleet pack from TrustGate Cloud shows a reviewer's name "
+    "that the machine did not write itself.",
 )
 
 
@@ -199,8 +202,16 @@ def build_from_entries(
     constitution: Constitution | None = None,
     start: float | None = None,
     end: float | None = None,
+    cloud: bool = False,
 ) -> EvidencePack:
     """Count a pack from entries that may come from many machines.
+
+    With `cloud=True`, resolutions marked `"_source": "cloud"` are the Cloud's
+    own record of a named reviewer's answer, and every other resolution is a
+    line a machine wrote about itself. A machine is the party being audited,
+    so its line can never put a reviewer's name in the pack: the Cloud's answer
+    always wins, a machine-only answer is labelled as the machine's own claim,
+    and any disagreement is printed at the top. See `_cloud_resolution`.
 
     The caller is responsible for the chain verdict, because only the caller
     knows how the entries were verified: one local file re-hashed on the spot,
@@ -237,13 +248,16 @@ def build_from_entries(
         ]
 
     resolutions: dict[str, dict] = {}
-    for entry in entries:
-        if entry.get("kind") != "resolution":
-            continue
-        rid = entry.get("request_id", "")
-        current = resolutions.get(rid)
-        if current is None or (entry.get("gated") and not current.get("gated")):
-            resolutions[rid] = entry
+    if cloud:
+        resolutions = _cloud_resolutions(entries, pack)
+    else:
+        for entry in entries:
+            if entry.get("kind") != "resolution":
+                continue
+            rid = entry.get("request_id", "")
+            current = resolutions.get(rid)
+            if current is None or (entry.get("gated") and not current.get("gated")):
+                resolutions[rid] = entry
 
     for entry in entries:
         if entry.get("kind") == "resolution":
@@ -266,6 +280,69 @@ def build_from_entries(
 
     _policy_warnings(pack)
     return pack
+
+
+CLOUD_METHOD_PREFIX = "cloud console"
+
+
+def _cloud_resolutions(entries: list[dict], pack: EvidencePack) -> dict[str, dict]:
+    """Pick one answer per request, where only the Cloud can name a reviewer."""
+    from_cloud: dict[str, dict] = {}
+    from_machines: dict[str, list[dict]] = {}
+    for entry in entries:
+        if entry.get("kind") != "resolution":
+            continue
+        rid = entry.get("request_id", "")
+        if entry.get("_source") == "cloud":
+            from_cloud[rid] = entry
+        else:
+            from_machines.setdefault(rid, []).append(entry)
+
+    chosen: dict[str, dict] = {}
+    for rid in set(from_cloud) | set(from_machines):
+        answer = from_cloud.get(rid)
+        claims = from_machines.get(rid, [])
+        if answer is not None:
+            chosen[rid] = _with_machine_report(answer, claims, pack, rid)
+        else:
+            chosen[rid] = _machine_claim(claims, pack, rid)
+    return chosen
+
+
+def _who(entry: dict) -> str:
+    return str((entry.get("approver") or {}).get("id", ""))
+
+
+def _with_machine_report(answer: dict, claims: list[dict], pack, rid: str) -> dict:
+    """The Cloud's answer, plus whether the machine says it was held waiting."""
+    out = dict(answer)
+    out["gated"] = False
+    for claim in claims:
+        agrees = claim.get("outcome") == answer.get("outcome") and _who(claim) == _who(answer)
+        if agrees and claim.get("gated"):
+            out["gated"] = True
+            out["gated_reported_by"] = claim.get("machine", "the machine")
+        elif not agrees and claim.get("outcome") in ("approved", "denied"):
+            pack.warnings.append(
+                f"Request {rid}: the machine's own record says {claim.get('outcome')} by "
+                f"{_who(claim) or 'nobody'}, but the Cloud records {answer.get('outcome')} by "
+                f"{_who(answer)}. The Cloud record is shown."
+            )
+    return out
+
+
+def _machine_claim(claims: list[dict], pack, rid: str) -> dict:
+    """No Cloud answer exists: show the machine's line as its own claim."""
+    best = next((c for c in claims if c.get("gated")), claims[0])
+    out = dict(best)
+    out["machine_claim"] = best.get("machine", "the machine")
+    method = str((best.get("approver") or {}).get("method", ""))
+    if method.startswith(CLOUD_METHOD_PREFIX) and best.get("outcome") in ("approved", "denied"):
+        pack.warnings.append(
+            f"Request {rid}: machine {out['machine_claim']} says a Cloud reviewer "
+            f"({_who(best)}) answered, but the Cloud has no such answer."
+        )
+    return out
 
 
 def _note_policy(pack: EvidencePack, entry: dict) -> None:
@@ -291,10 +368,14 @@ def _policy_warnings(pack: EvidencePack) -> None:
         )
     if unknown:
         n = sum(p["decisions"] for p in unknown)
+        tail = (
+            " For those, the rules shown below are only the file at report time."
+            if pack.report_policy_digest
+            else ""
+        )
         pack.warnings.append(
             f"{n} decision(s) do not record which policy they were made under "
-            "(written by an older version). For those, the rules shown below are "
-            "only the file at report time."
+            f"(written by an older version).{tail}"
         )
     if pack.report_policy_digest and known and not pack.policy_matches_report:
         if all(p["digest"] != pack.report_policy_digest for p in known):
@@ -348,7 +429,18 @@ def _reason_of(entry: dict) -> str:
 def _authority(resolution: dict | None) -> str:
     if not resolution:
         return "no answer recorded"
+    if resolution.get("machine_claim"):
+        return f"machine's own record ({resolution['machine_claim']}), not checked by the Cloud"
+    if resolution.get("gated_reported_by"):
+        return f"held the action (as reported by {resolution['gated_reported_by']})"
     return "held the action" if resolution.get("gated") else "recorded afterwards"
+
+
+def _who_cell(resolution: dict) -> str:
+    who = (resolution.get("approver") or {}).get("id", "—")
+    if resolution.get("machine_claim"):
+        return f"{who} (claimed by {resolution['machine_claim']})"
+    return str(who)
 
 
 def to_markdown(pack: EvidencePack) -> str:
@@ -416,7 +508,7 @@ def to_markdown(pack: EvidencePack) -> str:
         w("|---|---|---|---|---|---|")
         for e in pack.escalations:
             r = e.get("resolution") or {}
-            who = (r.get("approver") or {}).get("id", "—")
+            who = _who_cell(r) if r else "—"
             w(
                 f"| {_when(e.get('ts'))} | `{e.get('action_redacted','')}` | "
                 f"{_rule_of(e)} | {r.get('outcome', 'open')} | {who} | {_authority(r)} |"
@@ -499,7 +591,7 @@ def to_html(pack: EvidencePack) -> str:
 
     def esc_cells(x):
         r = x.get("resolution") or {}
-        who = (r.get("approver") or {}).get("id", "—")
+        who = _who_cell(r) if r else "—"
         outcome = r.get("outcome", "open")
         return (
             _when(x.get("ts")),
