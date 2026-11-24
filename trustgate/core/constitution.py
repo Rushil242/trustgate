@@ -11,13 +11,14 @@ Spec: Master Build Document v3.0, Part D.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, model_validator
 
 from trustgate.core.models import ActionRequest, ActionType, Effect
 from trustgate.core.normalize import extract_paths, path_matches_glob
@@ -231,6 +232,18 @@ class Constitution(BaseModel):
     metadata: Metadata = Field(default_factory=Metadata)
     principles: list[Principle] = Field(default_factory=list)
 
+    _digest: str = PrivateAttr(default="")
+
+    @property
+    def digest(self) -> str:
+        """SHA-256 of the exact policy bytes this was loaded from.
+
+        Stamped on every ledger entry, so a report can show which policy was in
+        force for each decision rather than whatever file exists on report day.
+        Empty for a constitution built in code rather than loaded from text.
+        """
+        return self._digest
+
     @model_validator(mode="after")
     def _check_unique_ids(self) -> Constitution:
         seen: set[str] = set()
@@ -289,9 +302,17 @@ class Constitution(BaseModel):
             )
 
         try:
-            return cls.model_validate(data)
+            constitution = cls.model_validate(data)
         except ValidationError as exc:
             raise ConstitutionError(_format_errors(source, data, exc)) from exc
+        constitution._digest = policy_digest(text)
+        return constitution
+
+
+def policy_digest(text: str | bytes) -> str:
+    """`sha256:<hex>` of policy text. One function so every caller agrees."""
+    data = text.encode("utf-8") if isinstance(text, str) else text
+    return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
 def compile_patterns(patterns: list[str], principle_id: str) -> list[re.Pattern[str]]:

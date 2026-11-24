@@ -75,9 +75,10 @@ QUESTION_MAP: tuple[tuple[str, str, str], ...] = (
     ),
     (
         "Who can change the policy, and is that change recorded?",
-        "not evidenced",
-        "The policy file is version controlled by the operator. This pack does not "
-        "evidence who changed it or when.",
+        "partial",
+        "Every decision records the hash of the policy file it was made under, so "
+        "a change shows up in the policy history table with its time. This pack "
+        "does not show who made the change.",
     ),
 )
 
@@ -120,6 +121,28 @@ class EvidencePack:
 
     blocked: list[dict[str, Any]] = field(default_factory=list)
     escalations: list[dict[str, Any]] = field(default_factory=list)
+
+    report_policy_digest: str = ""
+    """Hash of the policy file loaded when the report was made."""
+
+    policy_history: list[dict[str, Any]] = field(default_factory=list)
+    """Each distinct policy the decisions in this period were made under, in
+    the order it first appeared: digest, first and last time, decision count."""
+
+    warnings: list[str] = field(default_factory=list)
+    """Plain sentences printed at the top under "Read this first"."""
+
+    @property
+    def policy_matches_report(self) -> bool:
+        """True when every decision was made under the policy shown below."""
+        used = {p["digest"] for p in self.policy_history}
+        return bool(self.report_policy_digest) and used == {self.report_policy_digest}
+
+    @property
+    def policy_heading(self) -> str:
+        if self.policy_matches_report:
+            return "Controls in force"
+        return "Policy file at report time"
 
     @property
     def answered(self) -> int:
@@ -201,6 +224,7 @@ def build_from_entries(
 
     if constitution is not None:
         pack.constitution_name = constitution.metadata.name
+        pack.report_policy_digest = getattr(constitution, "digest", "")
         pack.principles = [
             {
                 "id": p.id,
@@ -228,6 +252,7 @@ def build_from_entries(
             continue
 
         pack.decisions += 1
+        _note_policy(pack, entry)
         effect = entry.get("effect", "")
         pack.effects[effect] += 1
         pack.surfaces[entry.get("surface", "unknown")] += 1
@@ -239,7 +264,48 @@ def build_from_entries(
                 {**entry, "resolution": resolutions.get(entry.get("request_id", ""))}
             )
 
+    _policy_warnings(pack)
     return pack
+
+
+def _note_policy(pack: EvidencePack, entry: dict) -> None:
+    digest = str(entry.get("policy_digest", ""))
+    ts = float(entry.get("ts", 0))
+    for row in pack.policy_history:
+        if row["digest"] == digest:
+            row["last"] = max(row["last"], ts)
+            row["first"] = min(row["first"], ts)
+            row["decisions"] += 1
+            return
+    pack.policy_history.append({"digest": digest, "first": ts, "last": ts, "decisions": 1})
+
+
+def _policy_warnings(pack: EvidencePack) -> None:
+    """Say plainly when the rules shown are not the rules that were applied."""
+    known = [p for p in pack.policy_history if p["digest"]]
+    unknown = [p for p in pack.policy_history if not p["digest"]]
+    if len(known) > 1:
+        pack.warnings.append(
+            f"The policy changed during this period: decisions were made under "
+            f"{len(known)} different policy files. See the policy history table."
+        )
+    if unknown:
+        n = sum(p["decisions"] for p in unknown)
+        pack.warnings.append(
+            f"{n} decision(s) do not record which policy they were made under "
+            "(written by an older version). For those, the rules shown below are "
+            "only the file at report time."
+        )
+    if pack.report_policy_digest and known and not pack.policy_matches_report:
+        if all(p["digest"] != pack.report_policy_digest for p in known):
+            pack.warnings.append(
+                "The policy file at report time was not used for any decision in "
+                "this period. The rules listed below are not the ones that were applied."
+            )
+
+
+def _short(digest: str) -> str:
+    return digest.removeprefix("sha256:")[:12] if digest else "not recorded"
 
 
 # --------------------------------------------------------------------------
@@ -312,12 +378,28 @@ def to_markdown(pack: EvidencePack) -> str:
         w(f"- **Answer could not be established: {len(pack.unclear)}**")
     w("")
 
+    if pack.warnings:
+        w("## Read this first\n")
+        for warning in pack.warnings:
+            w(f"- **{warning}**")
+        w("")
+
     if pack.principles:
-        w(f"## Controls in force: {pack.constitution_name}\n")
+        w(f"## {pack.policy_heading}: {pack.constitution_name}\n")
+        w(f"Policy file hash: `{_short(pack.report_policy_digest)}`\n")
         w("| Rule | What it says | How it is enforced |")
         w("|---|---|---|")
         for p in pack.principles:
             w(f"| `{p['id']}` | {p['statement']} | {p['enforcement']} ({p['effect']}) |")
+        w("")
+
+    if pack.policy_history:
+        w("## Policy history\n")
+        w("| Policy hash | First used | Last used | Decisions |")
+        w("|---|---|---|---|")
+        for p in pack.policy_history:
+            w(f"| `{_short(p['digest'])}` | {_when(p['first'])} | {_when(p['last'])} | "
+              f"{p['decisions']} |")
         w("")
 
     if pack.blocked:
@@ -384,6 +466,8 @@ def to_html(pack: EvidencePack) -> str:
             f"<li><strong>{len(pack.unclear)}</strong> escalation(s) have an answer we "
             "could not establish, recorded as unknown rather than assumed.</li>"
         )
+    for warning in pack.warnings:
+        flags.append(f"<li><strong>{e(warning)}</strong></li>")
     if not pack.chain_ok:
         flags.append(
             f"<li><strong>The record failed its integrity check.</strong> "
@@ -427,6 +511,15 @@ def to_html(pack: EvidencePack) -> str:
         )
 
     escalations = rows(pack.escalations, esc_cells)
+    history = rows(
+        pack.policy_history,
+        lambda p: (
+            f"<code>{e(_short(p['digest']))}</code>",
+            _when(p["first"]),
+            _when(p["last"]),
+            str(p["decisions"]),
+        ),
+    )
     questions = rows(
         QUESTION_MAP,
         lambda q: (e(q[0]), f'<span class="pill {q[1].split()[0]}">{e(q[1])}</span>', e(q[2])),
@@ -512,10 +605,16 @@ def to_html(pack: EvidencePack) -> str:
   any past line breaks every line after it.
 </div>
 
-<h2>Controls in force</h2>
-<p class="sub">{e(pack.constitution_name)}</p>
+<h2>{e(pack.policy_heading)}</h2>
+<p class="sub">{e(pack.constitution_name)} &middot; policy file hash
+<code>{e(_short(pack.report_policy_digest))}</code></p>
 <table><thead><tr><th>Rule</th><th>What it says</th><th>Enforcement</th></tr></thead>
 <tbody>{principles or '<tr><td colspan="3">No policy loaded.</td></tr>'}</tbody></table>
+
+<h2>Policy history</h2>
+<table><thead><tr><th>Policy hash</th><th>First used</th><th>Last used</th>
+<th>Decisions</th></tr></thead>
+<tbody>{history or '<tr><td colspan="4">No decisions in this period.</td></tr>'}</tbody></table>
 
 <h2>Actions that were stopped</h2>
 <table><thead><tr><th>When</th><th>Action</th><th>Rule</th><th>Why</th></tr></thead>
@@ -565,6 +664,9 @@ def to_json(pack: EvidencePack) -> str:
                 "detail": pack.chain_detail,
             },
             "constitution": pack.constitution_name,
+            "report_policy_digest": pack.report_policy_digest,
+            "policy_history": pack.policy_history,
+            "warnings": pack.warnings,
             "decisions": pack.decisions,
             "effects": dict(pack.effects),
             "surfaces": dict(pack.surfaces),

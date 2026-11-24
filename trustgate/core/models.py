@@ -264,6 +264,14 @@ class AuditEntry(BaseModel):
     correlation_id: str = ""
     """Copied from the request's context, so a resolution can find this entry."""
 
+    action_digest: str = ""
+    """Hash of the full tool input. Empty on entries written before 0.3.0."""
+
+    policy_digest: str = ""
+    """Hash of the policy bytes this decision was made under."""
+
+    engine_version: str = ""
+
 
 class Outcome(StrEnum):
     """How an escalation ended.
@@ -315,6 +323,8 @@ class ResolutionEntry(BaseModel):
     approver: dict[str, Any]
     detail: str = ""
     """Verbatim text from the surface, e.g. a denial reason. Redacted on write."""
+
+    engine_version: str = ""
 
     gated: bool = False
     """Whether this answer actually held the action, or only judged it after.

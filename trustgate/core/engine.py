@@ -123,7 +123,7 @@ class Engine:
         )
 
         if self.audit is not None:
-            self.audit.write(req, decision)
+            self.audit.write(req, decision, policy_digest=self.c.digest)
 
         return decision
 

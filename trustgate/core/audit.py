@@ -23,6 +23,7 @@ import json
 import os
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,6 +40,10 @@ from trustgate.core.models import (
 
 GENESIS_HASH = ""
 
+ENGINE_VERSION = "0.3.0.dev0"
+"""Stamped on every entry. Kept here, not imported, so the ledger has no
+dependency on package metadata being installed."""
+
 
 def compute_hash(entry: dict, prev_hash: str) -> str:
     """SHA-256 over the canonical entry body plus the previous link.
@@ -48,6 +53,60 @@ def compute_hash(entry: dict, prev_hash: str) -> str:
     """
     payload = json.dumps(entry, sort_keys=True, separators=(",", ":")) + prev_hash
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def action_digest(req: ActionRequest) -> str:
+    """`sha256:<hex>` of the full action: type, tool and every parameter.
+
+    The stored `action_redacted` is a short, redacted summary (for a file write
+    it is only the path). This digest commits to everything the tool received,
+    content included, without storing any of it.
+    """
+    canonical = json.dumps(
+        {"type": req.action.type.value, "tool": req.action.tool, "params": req.action.params},
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+@contextmanager
+def _file_lock(path: Path):
+    """Exclusive advisory lock across processes. No-op where flock is missing."""
+    try:
+        import fcntl
+    except ImportError:  # Windows: one process at a time is the caller's job
+        yield
+        return
+    with path.open("a") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def _lines_from_end(path: Path, block: int = 65536):
+    """Yield the file's non-empty lines, last line first."""
+    with path.open("rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        pos = fh.tell()
+        rest = b""
+        while pos > 0:
+            step = min(block, pos)
+            pos -= step
+            fh.seek(pos)
+            chunk = fh.read(step) + rest
+            parts = chunk.split(b"\n")
+            rest = parts[0]
+            for raw in reversed(parts[1:]):
+                text = raw.decode("utf-8", errors="replace").strip()
+                if text:
+                    yield text
+        text = rest.decode("utf-8", errors="replace").strip()
+        if text:
+            yield text
 
 
 @dataclass
@@ -64,22 +123,38 @@ class VerifyResult:
 
 
 class AuditLedger:
-    """Hash-chained append-only ledger backed by a local JSONL file."""
+    """Hash-chained append-only ledger backed by a local JSONL file.
+
+    Every hook call is a new process, so the in-process lock alone is not
+    enough: two hooks fired together would both read the same tail and both
+    write the same `seq`, which breaks the chain for good. Each append
+    therefore takes an exclusive `flock` on a sidecar lock file, re-reads the
+    tail from disk while holding it, and only then writes.
+    """
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self._lock = threading.Lock()
-        self._last_hash: str | None = None
-        self._next_seq: int | None = None
+
+    @property
+    def lock_path(self) -> Path:
+        return self.path.with_name(self.path.name + ".lock")
 
     # -- writing ----------------------------------------------------------
 
-    def write(self, req: ActionRequest, dec: Decision) -> AuditEntry:
-        """Append one entry and return it."""
-        with self._lock:
-            prev_hash, seq = self._tail()
+    def write(
+        self, req: ActionRequest, dec: Decision, policy_digest: str = ""
+    ) -> AuditEntry:
+        """Append one decision and return it.
 
-            body = {
+        `policy_digest` names the exact policy bytes the decision was made
+        under; `action_digest` is a hash of the full tool input, content
+        included, so an approval or a report can be tied to the exact action
+        even though only a redacted summary is stored in the clear.
+        """
+
+        def build(seq: int, prev_hash: str) -> dict:
+            return {
                 "seq": seq,
                 "kind": "decision",
                 "request_id": req.request_id,
@@ -88,17 +163,15 @@ class AuditLedger:
                 "surface": req.surface,
                 "principal": req.principal.model_dump(),
                 "action_redacted": redact(req.action.raw or str(req.action.params)),
+                "action_digest": action_digest(req),
+                "policy_digest": policy_digest,
+                "engine_version": ENGINE_VERSION,
                 "effect": dec.effect.value,
                 "reasons": [r.model_dump() for r in dec.reasons],
                 "prev_hash": prev_hash,
             }
-            body["entry_hash"] = compute_hash(body, prev_hash)
 
-            self._append_line(body)
-            self._last_hash = body["entry_hash"]
-            self._next_seq = seq + 1
-
-            return AuditEntry.model_validate(body)
+        return AuditEntry.model_validate(self._append(build))
 
     def write_resolution(
         self,
@@ -116,10 +189,9 @@ class AuditLedger:
         is missing would lose the more interesting of the two facts. Callers
         that need the pairing use `open_escalations`.
         """
-        with self._lock:
-            prev_hash, seq = self._tail()
 
-            body = {
+        def build(seq: int, prev_hash: str) -> dict:
+            return {
                 "seq": seq,
                 "kind": "resolution",
                 "request_id": request_id,
@@ -130,37 +202,39 @@ class AuditLedger:
                 # Denial reasons are surface text and can quote the command.
                 "detail": redact(detail),
                 "gated": gated,
+                "engine_version": ENGINE_VERSION,
                 "prev_hash": prev_hash,
             }
+
+        return ResolutionEntry.model_validate(self._append(build))
+
+    def _append(self, build) -> dict:
+        """Read the tail and append one line, as one step across processes."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock, _file_lock(self.lock_path):
+            prev_hash, seq = self._tail()
+            body = build(seq, prev_hash)
             body["entry_hash"] = compute_hash(body, prev_hash)
-
             self._append_line(body)
-            self._last_hash = body["entry_hash"]
-            self._next_seq = seq + 1
-
-            return ResolutionEntry.model_validate(body)
+        return body
 
     def _tail(self) -> tuple[str, int]:
-        """Previous hash and next sequence number, read from disk once."""
-        if self._last_hash is not None and self._next_seq is not None:
-            return self._last_hash, self._next_seq
+        """Previous hash and next sequence number, read from the end of the file.
 
-        last_hash, seq = GENESIS_HASH, 0
-        if self.path.is_file():
-            with self.path.open("r", encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        entry = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    last_hash = entry.get("entry_hash", last_hash)
-                    seq = int(entry.get("seq", seq)) + 1
-
-        self._last_hash, self._next_seq = last_hash, seq
-        return last_hash, seq
+        Always read from disk, never cached: another process may have appended
+        since we last looked. Reads backwards in blocks, so the cost does not
+        grow with the size of the ledger. Lines that are not valid entries are
+        skipped, as before; `verify` is what reports them.
+        """
+        if not self.path.is_file():
+            return GENESIS_HASH, 0
+        for line in _lines_from_end(self.path):
+            try:
+                entry = json.loads(line)
+                return str(entry["entry_hash"]), int(entry["seq"]) + 1
+            except (ValueError, KeyError, TypeError):
+                continue
+        return GENESIS_HASH, 0
 
     def _append_line(self, body: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -226,8 +300,23 @@ class AuditLedger:
             except json.JSONDecodeError:
                 continue
             if entry.get("kind") == "resolution" and entry.get("request_id") == request_id:
-                return entry
+                return entry if self._is_chained(entry) else None
         return None
+
+    def _is_chained(self, entry: dict) -> bool:
+        """Whether an answer is a real, chained entry in an intact ledger.
+
+        A line appended by hand, without a valid place in the chain, is not an
+        answer. Neither is anything in a ledger whose chain is broken: once the
+        record has been tampered with, no line in it can approve an action.
+
+        This raises the cost of forging an approval; it does not remove it.
+        Any process running as the same OS user can still compute a valid
+        hash. Only the guard room (a separate OS user) closes that.
+        """
+        if not entry.get("entry_hash") or "seq" not in entry:
+            return False
+        return bool(self.verify())
 
     def find_open_escalation(self, correlation_id: str) -> dict | None:
         """The unanswered escalation matching a surface-native id, if any.
