@@ -185,3 +185,25 @@ def test_no_policy_can_remove_the_protection(tmp_path, home):
 def test_ordinary_work_is_not_disturbed(tmp_path, home, tool, tool_input):
     cfg = _cfg(tmp_path)
     assert _hook(cfg, tool, tool_input) == "allow"
+
+
+def test_shipped_trust_never_covers_an_empty_or_ruleless_policy():
+    from trustgate.core.constitution import Constitution, policy_digest
+    from trustgate.core.pins import shipped_digests
+
+    assert policy_digest(b"") not in shipped_digests()
+    assert policy_digest(EMPTY) not in shipped_digests()
+    for p in (REPO / "trustgate" / "policies").glob("*.yaml"):
+        assert len(Constitution.from_file(p).principles) >= 3
+    assert len(shipped_digests()) >= 4  # current starters plus earlier releases
+
+
+def test_an_unchanged_older_starter_stays_trusted(tmp_path, home):
+    old = subprocess.run(
+        ["git", "show", "899f048:trustgate/policies/starter.coding.yaml"],
+        capture_output=True, cwd=REPO,
+    )
+    if old.returncode:
+        pytest.skip("git history not available")
+    cfg = _cfg(tmp_path, old.stdout.decode())
+    assert _hook(cfg, "Bash", {"command": "npm test"}) == "allow"

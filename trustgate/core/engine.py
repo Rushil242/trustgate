@@ -26,6 +26,7 @@ from trustgate.core.guards.secret import SecretGuard
 from trustgate.core.guards.supply_chain import SupplyChainGuard
 from trustgate.core.models import (
     ActionRequest,
+    ActionType,
     Decision,
     Effect,
     Reason,
@@ -111,6 +112,24 @@ class Engine:
                         severity="medium",
                     )
                 )
+
+        if (
+            req.action.type is ActionType.tool_call
+            and self.c.unknown_tools != "allow"
+            and not self.c.knows_tool(req.action.tool)
+        ):
+            verdict = combine_verdicts(verdict, Verdict(self.c.unknown_tools))
+            reasons.append(
+                Reason(
+                    guard="engine",
+                    rule_id="unknown-tool",
+                    message=(
+                        f"The policy has no rule for the tool {req.action.tool!r}, and it "
+                        f"says unknown tools {self.c.unknown_tools}"
+                    ),
+                    severity="high",
+                )
+            )
 
         if not self.policy_trusted and verdict is not Verdict.block:
             # Rules nobody approved cannot be the reason an action runs. A

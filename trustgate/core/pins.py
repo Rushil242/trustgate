@@ -28,6 +28,7 @@ from pathlib import Path
 from trustgate.core.constitution import policy_digest
 
 PINS_FILENAME = "pinned-policies.json"
+EMPTY_DIGEST = policy_digest(b"")
 
 
 def trustgate_home() -> Path:
@@ -43,7 +44,14 @@ def pins_path() -> Path:
 def shipped_digests() -> frozenset[str]:
     """Digests of the starter policies inside this package. Trusted as shipped."""
     folder = Path(__file__).resolve().parents[1] / "policies"
-    return frozenset(policy_digest(p.read_bytes()) for p in folder.glob("*.yaml"))
+    digests = {policy_digest(p.read_bytes()) for p in folder.glob("*.yaml")}
+    previous = folder / "previous-starters.txt"
+    if previous.is_file():
+        for line in previous.read_text(encoding="utf-8").splitlines():
+            word = line.split("#", 1)[0].strip().split(" ", 1)[0]
+            if word.startswith("sha256:") and word != EMPTY_DIGEST:
+                digests.add(word)
+    return frozenset(digests)
 
 
 def load_pins(path: Path | None = None) -> dict[str, dict]:

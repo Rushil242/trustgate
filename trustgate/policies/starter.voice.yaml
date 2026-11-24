@@ -10,6 +10,21 @@ metadata:
 #
 # Spec: Master Build Document v3.0, Part D.3.
 
+# A tool this file has never heard of goes to a person. Money and account
+# tools are named by the rules below; harmless lookups are listed here. An
+# agent that calls `refund_customer` or `wire_money` instead of the names the
+# rules know must not get through on a spelling.
+unknown_tools: escalate
+known_tools:
+  - lookup_order
+  - get_order_status
+  - get_delivery_status
+  - lookup_account
+  - check_balance
+  - list_recent_orders
+  - transfer_to_human
+  - end_call
+
 principles:
   - id: refund-limit
     statement: "Refunds over $100 require human approval."

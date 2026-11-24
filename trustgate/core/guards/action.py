@@ -41,9 +41,10 @@ from trustgate.core.models import (
 from trustgate.core.normalize import (
     PATH_PARAM_KEYS,
     extract_paths,
+    glob_could_match,
     invoked_utilities,
     is_dangerous_delete,
-    path_matches_glob,
+    matches_globs,
     shell_tokens,
 )
 
@@ -77,12 +78,28 @@ SECRET_PATH_GLOBS: tuple[str, ...] = (
     "**/*.p12",
     "**/*.pfx",
     "**/.aws/**",
+    "**/.aws",
     "**/.ssh/**",
+    "**/.ssh",
     "**/.netrc",
     "**/.npmrc",
     "**/.pypirc",
     "**/secrets.*",
     "**/service-account*.json",
+    # Templates exist to be committed and hold no secrets.
+    "!**/.env.example",
+    "!**/.env.sample",
+    "!**/.env.template",
+    "!**/.env.dist",
+)
+
+# Concrete names the globs above protect, used to ask what a shell glob such
+# as `.en*` or `id_*` could expand to.
+SECRET_SAMPLE_NAMES: tuple[str, ...] = (
+    ".env", ".env.local", ".env.production", "credentials", "credentials.json",
+    "server.pem", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "server.key",
+    "cert.p12", "cert.pfx", ".netrc", ".npmrc", ".pypirc", "secrets.yaml",
+    "service-account.json", ".aws", ".ssh",
 )
 
 # A read redirection: `... done < .env`. The token is already flattened out by
@@ -171,7 +188,9 @@ def touches_trustgate(req: ActionRequest, policy_source: str = "") -> str:
 
 
 def _is_protected(candidate: str) -> bool:
-    return any(path_matches_glob(candidate, g) for g in SECRET_PATH_GLOBS)
+    if matches_globs(candidate, list(SECRET_PATH_GLOBS)):
+        return True
+    return bool(glob_could_match(candidate, SECRET_SAMPLE_NAMES))
 
 
 def protected_paths(action_type: str, tool: str, params: dict, raw: str) -> list[str]:
@@ -195,7 +214,10 @@ def protected_tokens(command: str) -> list[str]:
     for token in shell_tokens(command):
         if token.startswith("-"):
             continue
-        for candidate in {token, token.lstrip("@<>=&")}:
+        options = {token, token.lstrip("@<>=&")}
+        if "=" in token:  # `f=.env; cat $f`, `--file=.env`
+            options.add(token.split("=", 1)[1])
+        for candidate in options:
             if candidate and _is_protected(candidate):
                 hits.append(candidate)
                 break
@@ -245,7 +267,7 @@ def _match_detail(principle, req: ActionRequest) -> str:
     paths = extract_paths(
         req.action.type.value, req.action.tool, req.action.params, req.action.raw
     )
-    hits = [p for p in paths if any(path_matches_glob(p, g) for g in globs)]
+    hits = [p for p in paths if matches_globs(p, globs)]
     return f" (this action touches {hits[0]})" if hits else ""
 
 
