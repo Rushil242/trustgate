@@ -90,10 +90,25 @@ def cmd_verify_audit(args: argparse.Namespace) -> int:
 
     cfg = Config.load()
     path = args.audit or cfg.audit_path
-    result = AuditLedger(path).verify()
+    keys = None
+    if args.pubkey:
+        # `key_id=base64` pairs, or a bare base64 key (its id is computed).
+        from trustgate.core.signing import key_id_for
+
+        keys = {}
+        for item in args.pubkey:
+            if "=" in item and item.startswith("ed25519:"):
+                key_id, public = item.split("=", 1)
+            else:
+                import base64
+
+                public = item
+                key_id = key_id_for(base64.b64decode(item))
+            keys[key_id] = public
+    result = AuditLedger(path).verify(public_keys=keys)
 
     if result.ok:
-        print(f"OK  chain intact — {result.entries_checked} entries verified ({path})")
+        print(f"OK  {result.detail}: {result.entries_checked} entries verified ({path})")
         return EXIT_OK
 
     print(f"FAIL  chain broken at seq {result.broken_seq} ({path})", file=sys.stderr)
@@ -111,7 +126,7 @@ def cmd_pending(args: argparse.Namespace) -> int:
     """
     import time
 
-    from trustgate.core.audit import AuditLedger
+    from trustgate.core.audit import AuditLedger, entry_time
     from trustgate.core.config import Config
 
     cfg = Config.load()
@@ -125,7 +140,7 @@ def cmd_pending(args: argparse.Namespace) -> int:
     now = time.time()
     print(f"{len(open_items)} escalation(s) awaiting a decision ({path})\n")
     for entry in open_items:
-        age = now - float(entry.get("ts", now))
+        age = now - (entry_time(entry) or now)
         rule = ""
         reasons = entry.get("reasons") or []
         if reasons:
@@ -582,6 +597,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_verify = sub.add_parser("verify-audit", help="verify the audit hash chain")
     p_verify.add_argument("-a", "--audit", help="path to the audit ledger JSONL")
+    p_verify.add_argument("--pubkey", action="append",
+                          help="machine public key (base64) to check signatures; repeatable")
     p_verify.set_defaults(func=cmd_verify_audit)
 
     p_evidence = sub.add_parser(

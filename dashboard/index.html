@@ -380,6 +380,8 @@
 </aside>
 
 <script>
+// Version 2 ledger entries store whole milliseconds in ts_ms.
+const tsOf = (x) => (x.ts != null ? x.ts : (x.ts_ms != null ? x.ts_ms / 1000 : 0));
 (() => {
   "use strict";
 
@@ -489,7 +491,7 @@
         <td class="action" title="${esc(e.action_redacted)}">${esc(e.action_redacted)}</td>
         <td class="rule">${rule}</td>
         <td class="surface">${esc(e.surface)}</td>
-        <td class="when" title="${esc(absTime(e.ts))}">${ago(e.ts)}</td>
+        <td class="when" title="${esc(absTime(tsOf(e)))}">${ago(tsOf(e))}</td>
         <td class="num">${e.seq}</td>
       </tr>`;
     }).join("");
@@ -575,7 +577,7 @@
         <dt>Answered by</dt><dd>${esc(a.id || "—")}</dd>
         <dt>Established</dt><dd>${esc(a.method || "—")}</dd>
         <dt>Authority</dt><dd>${held}</dd>
-        <dt>Answered at</dt><dd>${esc(absTime(r.ts))}</dd>
+        <dt>Answered at</dt><dd>${esc(absTime(tsOf(r)))}</dd>
         ${r.detail ? `<dt>Note</dt><dd>${esc(r.detail)}</dd>` : ""}
         <dt>Chain seq</dt><dd>${r.seq}</dd>
       </dl></div>`;
@@ -658,7 +660,7 @@
           <dt>Surface</dt><dd>${esc(e.surface)}</dd>
           <dt>Principal</dt><dd>${esc((e.principal && e.principal.id) || "—")}</dd>
           <dt>Roles</dt><dd>${esc(((e.principal && e.principal.roles) || []).join(", ") || "—")}</dd>
-          <dt>Timestamp</dt><dd>${esc(absTime(e.ts))}</dd>
+          <dt>Timestamp</dt><dd>${esc(absTime(tsOf(e)))}</dd>
           <dt>Request ID</dt><dd class="hash">${esc(e.request_id)}</dd>
         </dl>
       </div>

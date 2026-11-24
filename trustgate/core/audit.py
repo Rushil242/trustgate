@@ -55,6 +55,49 @@ def compute_hash(entry: dict, prev_hash: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+UNHASHED_FIELDS = ("entry_hash", "sig")
+"""Fields that are about the hash, so cannot be inside it."""
+
+
+def hashed_body(entry: dict) -> dict:
+    """The part of an entry its `entry_hash` covers. One rule for every reader."""
+    return {k: v for k, v in entry.items() if k not in UNHASHED_FIELDS}
+
+
+def check_canonical(value, where: str = "entry") -> None:
+    """Raise if `value` holds anything a version 2 entry may not contain.
+
+    Version 2 bytes must be reproducible in any language. Floats are the one
+    JSON value languages print differently, so they are not allowed: time is
+    whole milliseconds (`ts_ms`). Keys must be ASCII so every language sorts
+    them the same way. See docs/LEDGER-FORMAT.md.
+    """
+    if isinstance(value, bool) or value is None or isinstance(value, int | str):
+        return
+    if isinstance(value, float):
+        raise ValueError(f"{where} holds a float; version 2 entries allow integers only")
+    if isinstance(value, list):
+        for i, item in enumerate(value):
+            check_canonical(item, f"{where}[{i}]")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str) or not key.isascii():
+                raise ValueError(f"{where} has a non-ASCII or non-string key {key!r}")
+            check_canonical(item, f"{where}.{key}")
+        return
+    raise ValueError(f"{where} holds a {type(value).__name__}, which JSON cannot carry")
+
+
+def entry_time(entry: dict) -> float:
+    """Seconds since the epoch, for an entry of either version."""
+    if entry.get("ts") is not None:
+        return float(entry["ts"])
+    if entry.get("ts_ms") is not None:
+        return int(entry["ts_ms"]) / 1000
+    return 0.0
+
+
 def action_digest(req: ActionRequest) -> str:
     """`sha256:<hex>` of the full action: type, tool and every parameter.
 
@@ -221,7 +264,15 @@ class AuditLedger:
         with self._lock, _file_lock(self.lock_path):
             prev_hash, seq = self._tail()
             body = build(seq, prev_hash)
+            if self.signer is not None:
+                # Version 2: integers only, signed by this machine's key.
+                body["ts_ms"] = round(float(body.pop("ts")) * 1000)
+                body["v"] = 2
+                body["key_id"] = self.signer.key_id
+                check_canonical(body)
             body["entry_hash"] = compute_hash(body, prev_hash)
+            if self.signer is not None:
+                body["sig"] = self.signer.sign(body["entry_hash"])
             self._append_line(body)
         return body
 
@@ -340,11 +391,17 @@ class AuditLedger:
         ]
         return matches[-1] if matches else None
 
-    def verify(self) -> VerifyResult:
+    def verify(self, public_keys: dict[str, str] | None = None) -> VerifyResult:
         """Recompute the chain and report the first broken link.
 
         This is what `trustgate verify-audit` calls, and what proves in a demo
         that an edited log is detectable rather than merely discouraged.
+
+        `public_keys` maps key ids to base64 Ed25519 public keys. With it,
+        every version 2 entry's signature is checked. Without it, the chain is
+        checked and the result says the signatures were not. Either way, once
+        a signed entry appears, an unsigned entry after it is a failure: an
+        unsigned line in a signing ledger was written by someone without the key.
         """
         if not self.path.is_file():
             return VerifyResult(ok=True, entries_checked=0, detail="no ledger yet")
@@ -352,6 +409,9 @@ class AuditLedger:
         prev_hash = GENESIS_HASH
         checked = 0
         expected_seq = 0
+        signed_seen = False
+        signatures_checked = 0
+        unsigned = 0
 
         with self.path.open("r", encoding="utf-8") as fh:
             for lineno, line in enumerate(fh, start=1):
@@ -387,7 +447,7 @@ class AuditLedger:
                     )
 
                 stated = entry.get("entry_hash", "")
-                body = {k: v for k, v in entry.items() if k != "entry_hash"}
+                body = hashed_body(entry)
                 if compute_hash(body, prev_hash) != stated:
                     return VerifyResult(
                         ok=False,
@@ -397,8 +457,54 @@ class AuditLedger:
                         "(this entry was modified after it was written)",
                     )
 
+                problem = self._signature_problem(entry, stated, signed_seen, public_keys)
+                if problem:
+                    return VerifyResult(
+                        ok=False, entries_checked=checked, broken_seq=seq,
+                        detail=f"line {lineno}: {problem}",
+                    )
+                if entry.get("v") == 2:
+                    signed_seen = True
+                    signatures_checked += public_keys is not None
+                else:
+                    unsigned += 1
+
                 prev_hash = stated
                 checked += 1
                 expected_seq += 1
 
-        return VerifyResult(ok=True, entries_checked=checked, detail="chain intact")
+        detail = "chain intact"
+        if public_keys is not None and unsigned:
+            # Not a failure (older entries were never signed), but a reader
+            # checking signatures must see how much of the log they cover.
+            detail += f", {unsigned} unsigned entries (written before signing began)"
+        if signed_seen:
+            detail += (
+                f", {signatures_checked} signatures verified"
+                if public_keys is not None
+                else ", signatures not checked (no public key given)"
+            )
+        return VerifyResult(ok=True, entries_checked=checked, detail=detail)
+
+    @staticmethod
+    def _signature_problem(entry, stated, signed_seen, public_keys) -> str:
+        if entry.get("v") != 2:
+            if signed_seen:
+                return "unsigned entry after signed entries (written without the machine key)"
+            return ""
+        if not entry.get("sig") or not entry.get("key_id"):
+            return "version 2 entry without a signature"
+        try:
+            check_canonical(hashed_body(entry))
+        except ValueError as exc:
+            return f"not in canonical form: {exc}"
+        if public_keys is None:
+            return ""
+        public = public_keys.get(entry["key_id"])
+        if public is None:
+            return f"signed by unknown key {entry['key_id']}"
+        from trustgate.core.signing import check_signature
+
+        if not check_signature(public, stated, entry["sig"]):
+            return "signature does not match (forged or altered entry)"
+        return ""

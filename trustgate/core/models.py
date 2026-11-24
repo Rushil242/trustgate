@@ -14,7 +14,7 @@ import uuid
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 CONTRACT_VERSION = "1.0"
 
@@ -249,7 +249,21 @@ class AuditEntry(BaseModel):
 
     seq: int
     request_id: str
-    ts: float
+    ts: float = 0.0
+    """Seconds since the epoch. Version 2 entries store `ts_ms` instead."""
+
+    ts_ms: int | None = None
+    v: int = 1
+    """1: original format. 2: integers only, signed (`key_id`, `sig`)."""
+    key_id: str = ""
+    sig: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _time_from_ms(cls, data):
+        if isinstance(data, dict) and data.get("ts") is None and data.get("ts_ms") is not None:
+            data = {**data, "ts": int(data["ts_ms"]) / 1000}
+        return data
     surface: str
     principal: dict[str, Any]
     action_redacted: str
@@ -321,7 +335,21 @@ class ResolutionEntry(BaseModel):
     """The escalated decision this answers."""
 
     correlation_id: str = ""
-    ts: float
+    ts: float = 0.0
+    """Seconds since the epoch. Version 2 entries store `ts_ms` instead."""
+
+    ts_ms: int | None = None
+    v: int = 1
+    """1: original format. 2: integers only, signed (`key_id`, `sig`)."""
+    key_id: str = ""
+    sig: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _time_from_ms(cls, data):
+        if isinstance(data, dict) and data.get("ts") is None and data.get("ts_ms") is not None:
+            data = {**data, "ts": int(data["ts_ms"]) / 1000}
+        return data
     outcome: Outcome
     approver: dict[str, Any]
     detail: str = ""

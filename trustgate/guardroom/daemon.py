@@ -122,7 +122,13 @@ class GuardRoom:
     # -- building ---------------------------------------------------------
 
     def _signer(self):
-        return None  # Part 1B
+        """The machine key, made on first start. None if `cryptography` is missing."""
+        try:
+            from trustgate.core.signing import Signer
+
+            return Signer.load_or_create(self.state / "machine.key")
+        except RuntimeError:
+            return None
 
     def _build_engine(self) -> Engine:
         constitution = Constitution.from_file(self.policy_path)
@@ -162,6 +168,8 @@ class GuardRoom:
             "protection_level": self.protection_level(caller_uid),
             "chain_ok_at_start": self.ledger.chain_ok_at_start,
             "signing": self.ledger.signer is not None,
+            "key_id": getattr(self.ledger.signer, "key_id", ""),
+            "public_key": getattr(self.ledger.signer, "public_b64", ""),
         }
 
     def op_decide(self, request: dict, caller_uid: int | None) -> dict:

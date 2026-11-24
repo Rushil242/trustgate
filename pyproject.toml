@@ -31,6 +31,11 @@ server = [
 judge = [
     "httpx>=0.27",
 ]
+# The guard room daemon signs every ledger entry. Only it and the verifier
+# need this; the core engine does not.
+guardroom = [
+    "cryptography>=43",
+]
 all = [
     "trustgate[server,judge]",
 ]
@@ -61,6 +66,7 @@ dev = [
     "pytest-asyncio>=0.23",
     "httpx>=0.27",
     "ruff>=0.6",
+    "cryptography>=43",
 ]
 
 [tool.pytest.ini_options]

@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from trustgate.core.audit import AuditLedger
+from trustgate.core.audit import AuditLedger, entry_time
 from trustgate.core.constitution import Constitution
 
 # What a reviewer's questionnaire tends to ask, and the part of the ledger that
@@ -263,7 +263,7 @@ def build_from_entries(
     for entry in entries:
         if entry.get("kind") == "resolution":
             continue
-        if not _in_period(float(entry.get("ts", 0)), start, end):
+        if not _in_period(entry_time(entry), start, end):
             continue
 
         pack.decisions += 1
@@ -348,7 +348,7 @@ def _machine_claim(claims: list[dict], pack, rid: str) -> dict:
 
 def _note_policy(pack: EvidencePack, entry: dict) -> None:
     digest = str(entry.get("policy_digest", ""))
-    ts = float(entry.get("ts", 0))
+    ts = entry_time(entry)
     for row in pack.policy_history:
         if row["digest"] == digest:
             row["last"] = max(row["last"], ts)
@@ -500,7 +500,7 @@ def to_markdown(pack: EvidencePack) -> str:
         w("| When | Action | Rule |")
         w("|---|---|---|")
         for e in pack.blocked:
-            w(f"| {_when(e.get('ts'))} | `{e.get('action_redacted','')}` | {_rule_of(e)} |")
+            w(f"| {_when(entry_time(e))} | `{e.get('action_redacted','')}` | {_rule_of(e)} |")
         w("")
 
     if pack.escalations:
@@ -511,7 +511,7 @@ def to_markdown(pack: EvidencePack) -> str:
             r = e.get("resolution") or {}
             who = _who_cell(r) if r else "—"
             w(
-                f"| {_when(e.get('ts'))} | `{e.get('action_redacted','')}` | "
+                f"| {_when(entry_time(e))} | `{e.get('action_redacted','')}` | "
                 f"{_rule_of(e)} | {r.get('outcome', 'open')} | {who} | {_authority(r)} |"
             )
         w("")
@@ -583,7 +583,7 @@ def to_html(pack: EvidencePack) -> str:
     blocked = rows(
         pack.blocked,
         lambda b: (
-            _when(b.get("ts")),
+            _when(entry_time(b)),
             f"<code>{e(str(b.get('action_redacted','')))}</code>",
             f"<code>{e(_rule_of(b))}</code>",
             e(_reason_of(b)),
@@ -595,7 +595,7 @@ def to_html(pack: EvidencePack) -> str:
         who = _who_cell(r) if r else "—"
         outcome = r.get("outcome", "open")
         return (
-            _when(x.get("ts")),
+            _when(entry_time(x)),
             f"<code>{e(str(x.get('action_redacted','')))}</code>",
             f"<code>{e(_rule_of(x))}</code>",
             f'<span class="pill {e(outcome)}">{e(outcome)}</span>',
