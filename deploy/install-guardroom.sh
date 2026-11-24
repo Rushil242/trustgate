@@ -247,7 +247,25 @@ if [ "$OS" = "Darwin" ]; then
     run install -o root -g wheel -m 0644 "$HERE/macos/com.trustgate.guardroom.plist" \
         /Library/LaunchDaemons/com.trustgate.guardroom.plist
     run launchctl bootout system/com.trustgate.guardroom 2>/dev/null || true
-    run launchctl bootstrap system /Library/LaunchDaemons/com.trustgate.guardroom.plist
+    # bootout returns before the old daemon has fully stopped; bootstrapping
+    # too early fails with "5: Input/output error". Wait, then retry.
+    if [ "$DRY_RUN" -eq 0 ]; then
+        for _ in $(seq 1 50); do
+            launchctl print system/com.trustgate.guardroom >/dev/null 2>&1 || break
+            sleep 0.2
+        done
+        started=0
+        for attempt in 1 2 3 4 5; do
+            if launchctl bootstrap system /Library/LaunchDaemons/com.trustgate.guardroom.plist; then
+                started=1; break
+            fi
+            echo "bootstrap attempt $attempt failed; retrying" >&2
+            sleep 1
+        done
+        [ "$started" -eq 1 ] || { echo "could not start the daemon" >&2; exit 1; }
+    else
+        run launchctl bootstrap system /Library/LaunchDaemons/com.trustgate.guardroom.plist
+    fi
 else
     run install -o root -g root -m 0644 "$HERE/linux/trustgated.service" \
         /etc/systemd/system/trustgated.service
