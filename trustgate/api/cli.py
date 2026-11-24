@@ -388,8 +388,16 @@ def cmd_guardroom(args: argparse.Namespace) -> int:
     if args.action == "install-hook":
         return _install_thin_hook(args, run)
 
-    sock = run / ("admin.sock" if args.action == "resolve" else "agent.sock")
+    admin_ops = ("resolve", "policy-install")
+    sock = run / ("admin.sock" if args.action in admin_ops else "agent.sock")
     message = {"op": "status"}
+    if args.action == "policy-install":
+        if not args.policy:
+            print("policy-install needs --policy FILE and --by NAME", file=sys.stderr)
+            return EXIT_ERROR
+        message = {"op": "policy-install", "by": args.by or "",
+                   "policy_text": Path(args.policy).read_text(encoding="utf-8"),
+                   "note": args.note or ""}
     if args.action == "resolve":
         message = {"op": "resolve", "request_id": args.request_id, "outcome": args.outcome,
                    "approver": args.approver, "note": args.note or ""}
@@ -656,11 +664,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_pin.set_defaults(func=cmd_pin_policy)
 
     p_gr = sub.add_parser("guardroom", help="run or talk to the guard room daemon")
-    p_gr.add_argument("action", choices=["serve", "status", "resolve", "install-hook"])
+    p_gr.add_argument("action",
+                      choices=["serve", "status", "resolve", "policy-install", "install-hook"])
     p_gr.add_argument("request_id", nargs="?", help="resolve: the escalation's request id")
     p_gr.add_argument("outcome", nargs="?", choices=["approved", "denied"])
     p_gr.add_argument("--approver", default="", help="resolve: your name")
-    p_gr.add_argument("--note", help="resolve: a note kept with the answer")
+    p_gr.add_argument("--note", help="resolve / policy-install: a note kept in the log")
+    p_gr.add_argument("--policy", help="policy-install: the new policy file")
+    p_gr.add_argument("--by", help="policy-install: your name")
     p_gr.add_argument("--prod", action="store_true",
                       help="use /var/lib/trustgate and /var/run/trustgate (own OS user)")
     p_gr.add_argument("--state", help="state folder (policy, log, key)")

@@ -118,6 +118,7 @@ class GuardRoom:
         self.ledger = IndexedLedger(self.cfg.audit_path, signer=self._signer())
         self._lock = threading.Lock()
         self.engine = self._build_engine()
+        self._record_policy_at_start()
 
     # -- building ---------------------------------------------------------
 
@@ -141,6 +142,21 @@ class GuardRoom:
         # The daemon's own policy file is trusted by where it lives: only the
         # admin socket can change it. Pins are for the in-project hook.
         return Engine(constitution=constitution, audit=self.ledger, judge=judge)
+
+    def _record_policy_at_start(self) -> None:
+        """Make the log say which policy is in force from now on.
+
+        If the file differs from the last recorded change, it was installed
+        for the first time or edited while the daemon was not running. Either
+        way the log gets a line, so the change is never silent.
+        """
+        current, last = self.engine.c.digest, self.ledger.last_policy_digest()
+        if current != last:
+            self.ledger.write_policy_change(
+                last, current, by="(found at daemon start)", os_uid=self.uid,
+                note="first start" if not last else
+                "policy file differs from the last recorded change; edited while stopped",
+            )
 
     def protection_level(self, caller_uid: int | None) -> int:
         """1 when the caller is a different OS user than the daemon, else 0."""
@@ -228,7 +244,33 @@ class GuardRoom:
         return {"ok": True, "entry": entry.model_dump(mode="json")}
 
     def op_policy_install(self, request: dict, caller_uid: int | None) -> dict:
-        return {"ok": False, "error": "policy-install arrives in Part 1C"}
+        """Replace the policy. Admin socket only. Recorded with who did it."""
+        text = request.get("policy_text")
+        by = str(request.get("by", "")).strip()
+        if not isinstance(text, str) or not text.strip():
+            return {"ok": False, "error": "policy_text is required"}
+        if not by:
+            return {"ok": False, "error": "a policy change must name the person making it"}
+        try:
+            new = Constitution.from_yaml(text, source="policy-install")
+        except Exception as exc:  # noqa: BLE001 - ConstitutionError and friends
+            return {"ok": False, "error": f"policy not installed: {exc}"}
+        with self._lock:
+            old = self.engine.c.digest
+            if new.digest == old:
+                return {"ok": True, "unchanged": True, "digest": old}
+            tmp = self.policy_path.with_name("policy.yaml.new")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            os.replace(tmp, self.policy_path)
+            self.engine = self._build_engine()
+            entry = self.ledger.write_policy_change(
+                old, self.engine.c.digest, by=by, os_uid=caller_uid,
+                note=str(request.get("note", "")),
+            )
+        return {"ok": True, "old_digest": old, "new_digest": self.engine.c.digest,
+                "seq": entry.seq}
 
 
 # -- sockets ----------------------------------------------------------------

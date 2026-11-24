@@ -258,6 +258,39 @@ class AuditLedger:
 
         return ResolutionEntry.model_validate(self._append(build))
 
+    def write_policy_change(
+        self, old_digest: str, new_digest: str, by: str, os_uid: int | None, note: str = ""
+    ):
+        """Record that the policy in force changed, and who changed it."""
+        from trustgate.core.models import PolicyChangeEntry
+
+        def build(seq: int, prev_hash: str) -> dict:
+            return {
+                "seq": seq,
+                "kind": "policy_change",
+                "ts": time.time(),
+                "old_digest": old_digest,
+                "new_digest": new_digest,
+                "by": by,
+                "os_uid": os_uid,
+                "note": redact(note),
+                "engine_version": ENGINE_VERSION,
+                "prev_hash": prev_hash,
+            }
+
+        return PolicyChangeEntry.model_validate(self._append(build))
+
+    def last_policy_digest(self) -> str:
+        """The new_digest of the most recent policy_change entry, or ""."""
+        for line in _lines_from_end(self.path) if self.path.is_file() else ():
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if entry.get("kind") == "policy_change":
+                return str(entry.get("new_digest", ""))
+        return ""
+
     def _append(self, build) -> dict:
         """Read the tail and append one line, as one step across processes."""
         self.path.parent.mkdir(parents=True, exist_ok=True)

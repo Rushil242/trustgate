@@ -83,7 +83,9 @@ def test_thin_hook_decides_through_the_daemon(room, tmp_path):
     hook = _thin_copy(tmp_path, run)
     assert _run_hook(hook, "Bash", {"command": "cat .env"})["permissionDecision"] == "deny"
     assert _run_hook(hook, "Bash", {"command": "npm test"})["permissionDecision"] == "allow"
-    entries = AuditLedger(state / "audit.jsonl").read_all()
+    all_entries = AuditLedger(state / "audit.jsonl").read_all()
+    assert all_entries[0]["kind"] == "policy_change"  # recorded at daemon start
+    entries = [e for e in all_entries if e["kind"] == "decision"]
     assert [e["effect"] for e in entries] == ["block", "allow"]
     assert entries[0]["principal"]["id"] == f"unix:{os.geteuid()}"
     assert entries[0]["protection_level"] == 0
@@ -196,7 +198,7 @@ def test_parallel_hook_processes_keep_one_chain(room, tmp_path):
         p.stdin.close()
     assert all(p.wait(timeout=60) == 0 for p in procs)
     result = AuditLedger(state / "audit.jsonl").verify()
-    assert result.ok and result.entries_checked == 24
+    assert result.ok and result.entries_checked == 25  # 24 decisions + start-up policy line
 
 
 def test_decision_through_the_socket_is_fast(room):

@@ -350,6 +350,7 @@ class ResolutionEntry(BaseModel):
         if isinstance(data, dict) and data.get("ts") is None and data.get("ts_ms") is not None:
             data = {**data, "ts": int(data["ts_ms"]) / 1000}
         return data
+
     outcome: Outcome
     approver: dict[str, Any]
     detail: str = ""
@@ -371,3 +372,37 @@ class ResolutionEntry(BaseModel):
 
     prev_hash: str
     entry_hash: str = ""
+
+
+class PolicyChangeEntry(BaseModel):
+    """One ledger line recording that the policy in force changed.
+
+    Written by the guard room daemon when a policy is installed through its
+    admin socket, and at start-up when the policy file differs from the last
+    recorded change (edited while the daemon was down). `os_uid` comes from
+    the kernel, not from the request; `by` is the name the person gave.
+    """
+
+    seq: int
+    kind: str = "policy_change"
+    request_id: str = ""
+    old_digest: str
+    new_digest: str
+    by: str = ""
+    os_uid: int | None = None
+    note: str = ""
+    engine_version: str = ""
+    ts: float = 0.0
+    ts_ms: int | None = None
+    v: int = 1
+    key_id: str = ""
+    sig: str = ""
+    prev_hash: str
+    entry_hash: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _time_from_ms(cls, data):
+        if isinstance(data, dict) and data.get("ts") is None and data.get("ts_ms") is not None:
+            data = {**data, "ts": int(data["ts_ms"]) / 1000}
+        return data
