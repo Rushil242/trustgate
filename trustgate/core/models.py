@@ -272,6 +272,9 @@ class AuditEntry(BaseModel):
 
     engine_version: str = ""
 
+    protection_level: int | None = None
+    """0: the gate ran as the same OS user as the caller. 1: a separate user."""
+
 
 class Outcome(StrEnum):
     """How an escalation ended.

@@ -121,6 +121,14 @@ SELF_MARKERS: tuple[str, ...] = (
     "plugins/data/trustgate",   # the plugin's own venv
     ".claude/settings",         # what decides whether the hook runs at all
     ".claude/hooks",
+    "/var/lib/trustgate",       # the guard room's own folders
+    "/var/run/trustgate",
+    # Environment that the next session's hook will inherit. Setting
+    # TRUSTGATE_HOME in ~/.zshrc would point the in-project hook at a pin file
+    # the agent wrote. (The guard room's thin hook reads no environment.)
+    "trustgate_",
+    ".zshrc", ".zshenv", ".zprofile", ".bashrc", ".bash_profile", "/.profile",
+    "launchctl setenv",
 )
 
 # CLI subcommands that change what the gate trusts. A person runs these; an

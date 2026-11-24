@@ -155,6 +155,10 @@ def test_pin_policy_command(tmp_path, home, capsys):
         ("Bash", {"command": "trustgate approve -y --force"}),
         ("Bash", {"command": "/usr/local/bin/trustgate pin-policy -y"}),
         ("Bash", {"command": "pkill -f 'trustgate sync'"}),
+        ("Bash", {"command": "echo 'export TRUSTGATE_HOME=/tmp/x' >> ~/.zshrc"}),
+        ("Write", {"file_path": "/Users/x/.bash_profile", "content": "export A=1"}),
+        ("Bash", {"command": "launchctl setenv TRUSTGATE_CONSTITUTION /tmp/p.yaml"}),
+        ("Bash", {"command": "rm /var/run/trustgate/agent.sock"}),
         ("Bash", {"command": "python3 -c \"open('/Users/x/.trustgate/pins.json','w')\""}),
     ],
 )

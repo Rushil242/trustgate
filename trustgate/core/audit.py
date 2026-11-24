@@ -132,9 +132,11 @@ class AuditLedger:
     tail from disk while holding it, and only then writes.
     """
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, signer=None) -> None:
         self.path = Path(path)
         self._lock = threading.Lock()
+        self.signer = signer
+        """Optional. Signs each entry (see core/signing.py). The guard room sets it."""
 
     @property
     def lock_path(self) -> Path:
@@ -143,7 +145,11 @@ class AuditLedger:
     # -- writing ----------------------------------------------------------
 
     def write(
-        self, req: ActionRequest, dec: Decision, policy_digest: str = ""
+        self,
+        req: ActionRequest,
+        dec: Decision,
+        policy_digest: str = "",
+        stamps: dict | None = None,
     ) -> AuditEntry:
         """Append one decision and return it.
 
@@ -155,6 +161,7 @@ class AuditLedger:
 
         def build(seq: int, prev_hash: str) -> dict:
             return {
+                **(stamps or {}),
                 "seq": seq,
                 "kind": "decision",
                 "request_id": req.request_id,

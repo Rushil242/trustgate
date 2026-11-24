@@ -59,7 +59,7 @@ class Engine:
             SupplyChainGuard(constitution),
         ]
 
-    def decide(self, req: ActionRequest) -> Decision:
+    def decide(self, req: ActionRequest, stamps: dict | None = None) -> Decision:
         t0 = time.perf_counter()
 
         reasons: list[Reason] = []
@@ -162,7 +162,7 @@ class Engine:
         )
 
         if self.audit is not None:
-            self.audit.write(req, decision, policy_digest=self.c.digest)
+            self.audit.write(req, decision, policy_digest=self.c.digest, stamps=stamps)
 
         return decision
 

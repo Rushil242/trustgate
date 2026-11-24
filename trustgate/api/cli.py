@@ -339,6 +339,85 @@ def cmd_pin_policy(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+DEV_GUARDROOM = Path.home() / ".trustgate" / "guardroom"
+PROD_STATE, PROD_RUN = Path("/var/lib/trustgate"), Path("/var/run/trustgate")
+
+
+def _guardroom_dirs(args: argparse.Namespace) -> tuple[Path, Path]:
+    if args.prod:
+        return Path(args.state or PROD_STATE), Path(args.run or PROD_RUN)
+    return Path(args.state or DEV_GUARDROOM / "state"), Path(args.run or DEV_GUARDROOM / "run")
+
+
+def cmd_guardroom(args: argparse.Namespace) -> int:
+    """Run or talk to the guard room daemon."""
+    from trustgate.guardroom import daemon
+
+    state, run = _guardroom_dirs(args)
+    if args.action == "serve":
+        import signal
+        import threading
+
+        from trustgate.core.config import Config
+
+        daemon.serve(state, run, Config.load())
+        print(f"trustgated: state {state}, sockets in {run}", file=sys.stderr)
+        stop = threading.Event()
+        signal.signal(signal.SIGTERM, lambda *_: stop.set())
+        try:
+            stop.wait()
+        except KeyboardInterrupt:
+            pass
+        return EXIT_OK
+
+    if args.action == "install-hook":
+        return _install_thin_hook(args, run)
+
+    sock = run / ("admin.sock" if args.action == "resolve" else "agent.sock")
+    message = {"op": "status"}
+    if args.action == "resolve":
+        message = {"op": "resolve", "request_id": args.request_id, "outcome": args.outcome,
+                   "approver": args.approver, "note": args.note or ""}
+    try:
+        reply = daemon.request(sock, message)
+    except OSError as exc:
+        print(f"cannot reach the guard room at {sock}: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    print(json.dumps(reply, indent=2))
+    return EXIT_OK if reply.get("ok") else EXIT_DENIED
+
+
+def _install_thin_hook(args: argparse.Namespace, run: Path) -> int:
+    """Copy the thin hook with its socket path and fallback baked in."""
+    from trustgate.guardroom import hook as thin
+
+    source = Path(thin.__file__).read_text(encoding="utf-8")
+    fallback = "deny" if args.prod else "ask"
+    text = source.replace(
+        'SOCKET = "/var/run/trustgate/agent.sock"', f"SOCKET = {str(run / 'agent.sock')!r}"
+    ).replace('FALLBACK = "deny"', f"FALLBACK = {fallback!r}")
+    dest = Path(args.dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(text, encoding="utf-8")
+    dest.chmod(0o755)
+    py = args.python or "/usr/bin/python3"
+    snippet = {
+        "hooks": {
+            "PreToolUse": [{"hooks": [{"type": "command",
+                                       "command": f"{py} -I {dest} pretooluse",
+                                       "timeout": 200}]}],
+            **{event: [{"hooks": [{"type": "command",
+                                   "command": f"{py} -I {dest} observe", "timeout": 15}]}]
+               for event in ("PostToolUse", "PostToolUseFailure", "PermissionDenied")},
+        }
+    }
+    print(f"wrote {dest} (socket {run / 'agent.sock'}, fallback {fallback})")
+    print("Add this to your Claude Code settings"
+          + (" (managed settings, owned by root)" if args.prod else "") + ":")
+    print(json.dumps(snippet, indent=2))
+    return EXIT_OK
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     """Install the agent hook and a starter constitution into a project."""
     from trustgate.adapters.coding.install import install, next_steps
@@ -558,6 +637,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_pin.add_argument("--note", help="why this change was made")
     p_pin.add_argument("--list", action="store_true", help="show pinned policies")
     p_pin.set_defaults(func=cmd_pin_policy)
+
+    p_gr = sub.add_parser("guardroom", help="run or talk to the guard room daemon")
+    p_gr.add_argument("action", choices=["serve", "status", "resolve", "install-hook"])
+    p_gr.add_argument("request_id", nargs="?", help="resolve: the escalation's request id")
+    p_gr.add_argument("outcome", nargs="?", choices=["approved", "denied"])
+    p_gr.add_argument("--approver", default="", help="resolve: your name")
+    p_gr.add_argument("--note", help="resolve: a note kept with the answer")
+    p_gr.add_argument("--prod", action="store_true",
+                      help="use /var/lib/trustgate and /var/run/trustgate (own OS user)")
+    p_gr.add_argument("--state", help="state folder (policy, log, key)")
+    p_gr.add_argument("--run", help="socket folder")
+    p_gr.add_argument("--dest", default=".claude/hooks/trustgate-guardroom.py",
+                      help="install-hook: where to write the thin hook")
+    p_gr.add_argument("--python", help="install-hook: python to run it with")
+    p_gr.set_defaults(func=cmd_guardroom)
 
     p_approve = sub.add_parser(
         "approve", help="record the current hook/MCP configuration as reviewed"
