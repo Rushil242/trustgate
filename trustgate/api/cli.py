@@ -687,24 +687,36 @@ def build_parser() -> argparse.ArgumentParser:
     p_pin.set_defaults(func=cmd_pin_policy)
 
     p_gr = sub.add_parser("guardroom", help="run or talk to the guard room daemon")
-    p_gr.add_argument("action",
-                      choices=["serve", "status", "resolve", "policy-install", "install-hook"])
-    p_gr.add_argument("request_id", nargs="?", help="resolve: the escalation's request id")
-    p_gr.add_argument("outcome", nargs="?", choices=["approved", "denied"])
-    p_gr.add_argument("--approver", default="", help="resolve: your name")
-    p_gr.add_argument("--note", help="resolve / policy-install: a note kept in the log")
-    p_gr.add_argument("--policy", help="policy-install: the new policy file")
-    p_gr.add_argument("--by", help="policy-install: your name")
-    p_gr.add_argument("--prod", action="store_true",
-                      help="use /var/lib/trustgate and /var/run/trustgate (own OS user)")
-    p_gr.add_argument("--state", help="state folder (policy, log, key)")
-    p_gr.add_argument("--run", help="socket folder")
-    p_gr.add_argument("--dest", default=".claude/hooks/trustgate-guardroom.py",
-                      help="install-hook: where to write the thin hook")
-    p_gr.add_argument("--python", help="install-hook: python to run it with")
-    p_gr.add_argument("--settings-out",
-                      help="install-hook: also write the Claude Code settings JSON to this file")
-    p_gr.set_defaults(func=cmd_guardroom)
+    gr = p_gr.add_subparsers(dest="action", required=True)
+
+    def gr_cmd(name: str, help_text: str) -> argparse.ArgumentParser:
+        # Each action has its own parser, so flags and arguments may come in
+        # any order: `resolve --prod ID approved` and `resolve ID approved --prod`.
+        p = gr.add_parser(name, help=help_text)
+        p.add_argument("--prod", action="store_true",
+                       help="the installed guard room, running as its own OS user")
+        p.add_argument("--state", help="state folder (policy, log, key)")
+        p.add_argument("--run", help="socket folder")
+        p.set_defaults(func=cmd_guardroom)
+        return p
+
+    gr_cmd("serve", "run the daemon")
+    gr_cmd("status", "ask the daemon how it is running")
+    p_res = gr_cmd("resolve", "approve or deny a held action (admin socket)")
+    p_res.add_argument("request_id", help="the escalation's request id")
+    p_res.add_argument("outcome", choices=["approved", "denied"])
+    p_res.add_argument("--approver", required=True, help="your name")
+    p_res.add_argument("--note", help="a note kept in the log")
+    p_pol = gr_cmd("policy-install", "replace the policy (admin socket)")
+    p_pol.add_argument("--policy", required=True, help="the new policy file")
+    p_pol.add_argument("--by", required=True, help="your name")
+    p_pol.add_argument("--note", help="why, kept in the log")
+    p_hook = gr_cmd("install-hook", "write the thin hook with its socket path baked in")
+    p_hook.add_argument("--dest", default=".claude/hooks/trustgate-guardroom.py",
+                        help="where to write the thin hook")
+    p_hook.add_argument("--python", help="python to run it with")
+    p_hook.add_argument("--settings-out",
+                        help="also write the Claude Code settings JSON to this file")
 
     p_approve = sub.add_parser(
         "approve", help="record the current hook/MCP configuration as reviewed"

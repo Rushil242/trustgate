@@ -273,3 +273,25 @@ def test_resolve_needs_a_real_escalation(room):
     reply = daemon.request(run / "admin.sock", {"op": "resolve", "request_id": "made-up",
                                                 "outcome": "approved", "approver": "p"})
     assert not reply["ok"] and "no escalation" in reply["error"]
+
+
+@pytest.mark.parametrize("argv", [
+    ["guardroom", "resolve", "--prod", "r1", "approved", "--approver", "p"],
+    ["guardroom", "resolve", "r1", "approved", "--approver", "p", "--prod"],
+    ["guardroom", "policy-install", "--prod", "--policy", "x.yaml", "--by", "p"],
+    ["guardroom", "status", "--prod"],
+])
+def test_guardroom_cli_accepts_the_printed_orders(argv):
+    # The installer prints `resolve --prod REQUEST_ID approved`; argparse used
+    # to reject that order. Parse only, so no daemon is needed.
+    from trustgate.api import cli
+
+    args = cli.build_parser().parse_args(argv)
+    assert args.prod and args.func is cli.cmd_guardroom
+
+
+def test_resolve_needs_an_approver_name():
+    from trustgate.api import cli
+
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["guardroom", "resolve", "r1", "approved"])
