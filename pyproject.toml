@@ -39,8 +39,8 @@ all = [
 trustgate = "trustgate.api.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/trustgate/trustgate"
-Issues = "https://github.com/trustgate/trustgate/issues"
+Homepage = "https://github.com/Rushil242/trustgate"
+Issues = "https://github.com/Rushil242/trustgate/issues"
 
 [build-system]
 requires = ["hatchling"]

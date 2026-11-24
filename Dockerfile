@@ -5,7 +5,7 @@
 
 FROM python:3.12-slim AS builder
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.1 /uv /usr/local/bin/uv
 
 # Build at the SAME path the runtime image uses. A venv's console scripts
 # hardcode their interpreter in the shebang, so building at /build and copying

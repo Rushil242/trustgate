@@ -88,6 +88,12 @@ class ApprovalConfig:
     `remote` holds the action and waits for a named person to answer in the
     console. It is the only mode where the approval is a control rather than a
     record, and it is opt-in because it makes an unattended agent stop dead.
+
+    Not safe against the agent itself when answered in the *local* console:
+    the gate runs as the agent's own OS user, so the agent can reach the same
+    log file and the same console. Answers must sit in an intact chain, which
+    raises the bar, but a process that can compute a hash can still forge one.
+    With TrustGate Cloud configured, only the Cloud's answer counts.
     """
 
     mode: str = "local"

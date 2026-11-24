@@ -37,10 +37,11 @@ from trustgate.core.constitution import Constitution
 QUESTION_MAP: tuple[tuple[str, str, str], ...] = (
     (
         "What prevents the AI system from taking unauthorised actions?",
-        "evidenced",
-        "Every action is checked against the written policy below before it runs, "
-        "outside the model, by code that cannot be argued with. Blocked attempts "
-        "are listed in this pack.",
+        "partial",
+        "Every action is checked against the written policy before it runs, outside "
+        "the model. Actions that match a rule are stopped or sent to a person, and "
+        "are listed in this pack. An action spelled in a way no rule matches is "
+        "allowed, so this is evidenced for actions that matched a rule.",
     ),
     (
         "Are AI actions logged, and for how long?",

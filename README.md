@@ -186,7 +186,7 @@ Context → Action → Secret → Supply-chain → (LLM judge, only when needed)
 **The `.env` bypass is the interesting part.** A rule that blocks `cat .env` is trivially defeated. TrustGate tokenises the command, flattens pipes, redirects and subshells, then asks: *is a protected path here, and is anything consuming it?*
 
 <details>
-<summary><b>All eight of these read the same file — all eight are blocked by one rule</b></summary>
+<summary><b>All eight of these read the same file, and one rule blocks all eight. That is these eight, not every spelling that exists.</b></summary>
 
 ```bash
 cat .env
@@ -328,7 +328,7 @@ REFUSED  history rewritten on api-1: seq 0 differs from the line already receive
 | Detects a log that was edited | yes | yes |
 | Detects a log that was wiped and replaced | **no** | **yes** |
 | Approval queue | one machine | one inbox for the whole fleet; approve once, the waiting agent on any machine continues |
-| Who approved | whoever is at the keyboard | a named reviewer, recorded under their own key |
+| Who approved | whoever is at the keyboard | a named reviewer, recorded by the Cloud under their own key. A line a machine wrote about itself is shown as that machine's claim |
 
 Connecting a machine is two environment variables. Nothing changes in the
 engine, and a slow or unreachable cloud never slows the agent: entries queue on
@@ -358,7 +358,7 @@ Self-measured: I wrote these attacks and the defences. [CHALLENGE.md](CHALLENGE.
 | False positives | **0** | **0** |
 | Median decision latency | **0.10 ms** | **0.03 ms** |
 
-Against a 50 ms budget for the whole deterministic path. **Both numbers are CI gates** — one missed attack *or* one blocked legitimate command fails the build. Run them yourself with `uv run trustgate test`.
+These are the engine alone. A full hook call, which starts a new Python process each time, takes about 85 ms on a laptop. Against a 50 ms budget for the whole deterministic path. **Both numbers are CI gates** — one missed attack *or* one blocked legitimate command fails the build. Run them yourself with `uv run trustgate test`.
 
 ---
 
@@ -367,7 +367,10 @@ Against a 50 ms budget for the whole deterministic path. **Both numbers are CI g
 Stated plainly, because a security tool vague about its limits is worse than one with narrow honest ones. Full detail in the [threat model](docs/THREAT_MODEL.md).
 
 - **The 100% is measured against attacks I wrote myself.** That biases it upward. It means the known attack classes are covered — not that the gate is unbypassable. [Independent red-teaming](SECURITY.md) is the most valuable contribution anyone can make here.
-- **A compromised host is out of scope.** Anyone who can edit TrustGate's code, policy or ledger has already won.
+- **Today the gate runs as the same OS user as the agent.** So the agent can, in principle, reach TrustGate's own files. TrustGate pins the policy by hash and sends any action on its own files (policy, log, hooks, settings, install) to a person, which raises the bar. It is not a wall. Moving the gate to its own OS user is the next piece of work.
+- **Remote approval through the local console is not safe against the agent itself.** The agent's user can reach the same log file and the same local console. For approvals that must hold against the agent, use TrustGate Cloud, where only a named reviewer's key can answer.
+- **Rules read the text of an action, not what it does.** Many spellings are covered; a shell can always spell one more. Limiting what the process can touch is the lasting answer, and it is on the roadmap.
+- **A compromised host is out of scope.** Anyone with root, or with TrustGate's own OS user, has already won.
 - **Tamper-evident, not tamper-proof.** Someone who can rewrite the whole log can rebuild the chain. Detecting that needs a copy held elsewhere, which is what [TrustGate Cloud](#trustgate-cloud) is.
 - **Secret detection is a denylist**, incomplete by construction.
 - **Multi-turn attacks aren't modelled.** Each action is judged on its own.
@@ -405,7 +408,7 @@ Keeping that copy is the honest reason the paid version exists, and it is worth 
 Bypasses are the most useful contribution. Adding one is a single file in `redteam/community/`, and every accepted one stays in the suite as a permanent regression case. See [CHALLENGE.md](CHALLENGE.md), [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
 ```bash
-uv run pytest        # 399 tests
+uv run pytest        # 524 tests
 uv run ruff check .
 uv run trustgate test
 ```

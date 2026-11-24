@@ -218,13 +218,13 @@ Indicative, not certified.
 | OWASP Agentic risk | TrustGate control | Strength |
 |---|---|---|
 | Agent goal manipulation | Context Guard + reasoning principles | Partial — tripwire, plus action-level enforcement |
-| Tool misuse | Action Guard, deterministic matchers | Strong |
-| Privilege compromise | Roles from session, never from prompt text | Strong |
-| Unexpected code execution | Remote-pipe-to-shell rules, Supply-Chain Guard | Strong |
+| Tool misuse | Action Guard, deterministic matchers | Moderate. Strong for the spellings covered; text rules cannot cover every spelling a shell allows |
+| Privilege compromise | Roles from session, never from prompt text | Weak today. No rule uses roles yet, and the HTTP API takes the principal from the caller |
+| Unexpected code execution | Remote-pipe-to-shell rules, Supply-Chain Guard | Moderate. Common installer forms are covered; a download saved and run later is not |
 | Agent supply chain | Digest manifest for hooks/skills/MCP | Moderate — MCP-invocation scoped |
 | Sensitive data exposure | Secret Guard, redaction on every audit write | Strong for known key shapes |
 | Cascading failures | Short-circuit + fail-safe escalation | Moderate |
-| Insufficient observability | Hash-chained ledger of every decision | Strong |
+| Insufficient observability | Hash-chained ledger of every decision, stamped with the policy hash | Moderate. Records decisions, not what the action changed; an unsynced tail can be rewritten |
 | Human-in-the-loop bypass | `escalate` + `require_human_approval` obligation | Depends on the adapter honouring it |
 | Memory / context poisoning | Context Guard on ingested content | Partial — single-turn only |
 

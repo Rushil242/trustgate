@@ -8,7 +8,8 @@ set -uo pipefail
 DATA="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/trustgate}"
 VENV="$DATA/venv"
 STAMP="$DATA/installed-from"
-SPEC="${TRUSTGATE_PLUGIN_SOURCE:-trustgate @ git+https://github.com/Rushil242/trustgate@v0.2.0}"
+# Pinned to the commit of v0.2.0, not the tag: a tag can be moved, a commit hash cannot.
+SPEC="${TRUSTGATE_PLUGIN_SOURCE:-trustgate @ git+https://github.com/Rushil242/trustgate@5bccd391f579c21142eee0252efaa8486723a015}"
 
 if [ -x "$VENV/bin/python" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$SPEC" ]; then
     exit 0

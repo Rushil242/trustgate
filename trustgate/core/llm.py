@@ -74,7 +74,7 @@ class OpenAICompatLLM:
             headers["Authorization"] = f"Bearer {self.cfg.api_key}"
         if "openrouter" in self.cfg.base_url:
             # OpenRouter attributes traffic via these; harmless elsewhere.
-            headers["HTTP-Referer"] = "https://github.com/trustgate/trustgate"
+            headers["HTTP-Referer"] = "https://github.com/Rushil242/trustgate"
             headers["X-Title"] = "TrustGate"
 
         payload: dict[str, Any] = {
