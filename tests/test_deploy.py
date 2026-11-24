@@ -67,7 +67,9 @@ def test_systemd_unit_matches_the_code():
 def test_macos_dry_run_steps():
     out = _dry(os_name="Darwin")
     state, run = cli.prod_dirs("darwin")
-    for step in ("dscl . -create /Users/_trustgate", "chmod 0700", "launchctl bootstrap system",
+    flat = out.replace("\\ ", " ")
+    assert "dscl . -create /Users/_trustgate" in flat or "exists: _trustgate" in flat
+    for step in ("chmod 0700", "launchctl bootstrap system",
                  "managed-settings.d/50-trustgate.json", "-m 0644", "--settings-out",
                  "guardroom install-hook --prod"):
         assert step in out.replace("\\ ", " "), step
@@ -135,3 +137,18 @@ def test_the_agent_cannot_run_guardroom_commands_itself(tmp_path, monkeypatch):
                     "rm /etc/claude-code/managed-settings.d/50-trustgate.json"):
         out = decide({"tool_name": "Bash", "tool_input": {"command": command}}, config=cfg)
         assert out["hookSpecificOutput"]["permissionDecision"] in ("ask", "deny"), command
+
+
+def test_installer_checks_who_can_write_not_just_the_owner():
+    text = SCRIPT.read_text()
+    # python.org installs are root-owned but admin-writable; the owner test alone passed them.
+    assert "-perm -g+w" in text and "--lock-python" in text
+    assert 'PY="$REAL_PY"' in text  # never build the venv through a swappable symlink
+    assert 'HOOK_PY="${HOOK_PY:-$PY}"' in text  # the hook runs on the same checked Python
+
+
+def test_lock_python_dry_run_shows_the_lock_steps():
+    out = _dry("--lock-python", os_name="Darwin")
+    if "checks skipped" in out:
+        pytest.skip("no Python 3.11+ in a system location on this machine")
+    assert "chmod -R go-w" in out or "ok: only root can change" in out

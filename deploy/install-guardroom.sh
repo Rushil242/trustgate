@@ -6,7 +6,8 @@
 #   sudo deploy/install-guardroom.sh --uninstall # stop and remove; keeps the log
 #
 # What it does, in order:
-#   1. checks the Python the daemon will run on is owned by root
+#   1. checks that nobody but root can change the Python the daemon and the
+#      hook run on (--lock-python makes it so for a python.org install)
 #   2. creates the _trustgate user (trustgate on Linux)
 #   3. creates the daemon's folders: state 0700 and run 0755, owned by that user
 #   4. installs TrustGate into a root-owned venv in /usr/local/lib/trustgate
@@ -20,9 +21,10 @@ set -euo pipefail
 DRY_RUN=0
 UNINSTALL=0
 MANAGED_HOOKS_ONLY=1
+LOCK_PYTHON=0
 SOURCE=""
 PY=""
-HOOK_PY="/usr/bin/python3"
+HOOK_PY=""
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 
@@ -34,6 +36,7 @@ while [ $# -gt 0 ]; do
         --python) PY="$2"; shift ;;
         --hook-python) HOOK_PY="$2"; shift ;;
         --allow-other-hooks) MANAGED_HOOKS_ONLY=0 ;;
+        --lock-python) LOCK_PYTHON=1 ;;
         -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
@@ -116,27 +119,58 @@ if [ -z "$PY" ]; then
 fi
 
 owner_of() { if [ "$OS" = "Darwin" ]; then stat -f %u "$1"; else stat -c %u "$1"; fi; }
-check_root_owned() {
-    # The daemon runs this interpreter and its standard library. If your own
-    # user can change them (Homebrew, pyenv, uv all live in your home or in
-    # folders you own), the agent can change the code the gate runs.
-    local path real
-    path="$1"
-    real="$(cd "$(dirname "$path")" && pwd -P)/$(basename "$path")"
-    [ -L "$path" ] && real="$("$path" -c 'import sys,os; print(os.path.realpath(sys.executable))')"
-    for p in "$real" "$("$path" -c 'import sysconfig; print(sysconfig.get_paths()["stdlib"])')"; do
-        if [ "$(owner_of "$p")" != "0" ]; then
-            echo "REFUSED: $p is not owned by root. The agent's user could change it." >&2
-            return 1
+mode_of() { if [ "$OS" = "Darwin" ]; then stat -f %Lp "$1"; else stat -c %a "$1"; fi; }
+
+# The daemon runs this interpreter and its whole install as _trustgate, and the
+# hook runs it as you. If anything in it is writable by your user, directly or
+# through a group such as `admin`, the agent can change the code the gate
+# runs. Owner alone is not enough: python.org installs are owned by root but
+# group-writable by `admin`, which every macOS administrator account is in.
+others_can_write() {
+    # Prints the first few paths that are not root-owned or that group/other
+    # can write, in the prefix and in every folder above it.
+    local prefix="$1" dir
+    find "$prefix" \( ! -user root -o -perm -g+w -o -perm -o+w \) ! -type l 2>/dev/null | head -5
+    dir="$prefix"
+    while [ "$dir" != "/" ]; do
+        dir="$(dirname "$dir")"
+        if [ "$(owner_of "$dir")" != "0" ] || [ $(( 0$(mode_of "$dir") & 022 )) -ne 0 ]; then
+            # /tmp-style sticky folders are not on this path; anything here is a problem.
+            echo "$dir"
         fi
     done
-    echo "ok: $real and its standard library are owned by root"
 }
+
 if [ -x "$PY" ]; then
-    check_root_owned "$PY" || [ "$DRY_RUN" -eq 1 ] || exit 1
+    REAL_PY="$("$PY" -I -c 'import os,sys; print(os.path.realpath(sys.executable))')"
+    PREFIX="$("$PY" -I -c 'import sys; print(sys.base_prefix)')"
+    PY="$REAL_PY"   # never a symlink that a writable folder could swap
+    BAD="$(others_can_write "$PREFIX")"
+    if [ -n "$BAD" ] && [ "$LOCK_PYTHON" -eq 1 ]; then
+        echo "locking $PREFIX: removing group and other write access (owner root)"
+        run chown -R root "$PREFIX"
+        run chmod -R go-w "$PREFIX"
+        case "$PREFIX" in
+            /Library/Frameworks/Python.framework/*)
+                run chmod go-w /Library/Frameworks/Python.framework/Versions ;;
+        esac
+        [ "$DRY_RUN" -eq 0 ] && BAD="$(others_can_write "$PREFIX")"
+    fi
+    if [ -n "$BAD" ] && [ "$DRY_RUN" -eq 0 ] || { [ -n "$BAD" ] && [ "$LOCK_PYTHON" -eq 0 ]; }; then
+        echo "REFUSED: users other than root can change this Python ($PREFIX):" >&2
+        echo "$BAD" | sed 's/^/  /' >&2
+        echo "Fix: rerun with --lock-python (removes group write from that install; use" >&2
+        echo "venvs for your own packages), or pass --python for a root-only interpreter." >&2
+        [ "$DRY_RUN" -eq 1 ] || exit 1
+    elif [ -z "$BAD" ]; then
+        echo "ok: only root can change $PREFIX"
+    else
+        echo "(dry run: would lock $PREFIX, then check again)"
+    fi
 else
-    echo "(dry run: $PY not present, ownership check skipped)"
+    echo "(dry run: $PY not present, checks skipped)"
 fi
+HOOK_PY="${HOOK_PY:-$PY}"
 
 # ---------------------------------------------------------------- 2. user
 say "2. creating the $TG_USER user"
