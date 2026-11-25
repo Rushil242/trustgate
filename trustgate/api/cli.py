@@ -404,7 +404,7 @@ def cmd_guardroom(args: argparse.Namespace) -> int:
 
     admin_ops = ("resolve", "policy-install")
     sock = run / ("admin.sock" if args.action in admin_ops else "agent.sock")
-    message = {"op": "status"}
+    message = {"op": "pending" if args.action == "pending" else "status"}
     if args.action == "policy-install":
         if not args.policy:
             print("policy-install needs --policy FILE and --by NAME", file=sys.stderr)
@@ -420,6 +420,16 @@ def cmd_guardroom(args: argparse.Namespace) -> int:
     except OSError as exc:
         print(f"cannot reach the guard room at {sock}: {exc}", file=sys.stderr)
         return EXIT_ERROR
+    if args.action == "pending" and reply.get("ok"):
+        items = reply.get("pending", [])
+        if not items:
+            print("nothing is waiting for an answer")
+        for item in items:
+            print(f"{item['request_id']}  {item['rule']:<28} {item['caller']:<10} {item['action']}")
+        if items:
+            print("\napprove or deny with:\n  sudo trustgate-admin guardroom resolve --prod "
+                  "REQUEST_ID approved|denied --approver \"Your Name\"")
+        return EXIT_OK
     print(json.dumps(reply, indent=2))
     return EXIT_OK if reply.get("ok") else EXIT_DENIED
 
@@ -702,6 +712,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     gr_cmd("serve", "run the daemon")
     gr_cmd("status", "ask the daemon how it is running")
+    gr_cmd("pending", "list held actions and their request ids")
     p_res = gr_cmd("resolve", "approve or deny a held action (admin socket)")
     p_res.add_argument("request_id", help="the escalation's request id")
     p_res.add_argument("outcome", choices=["approved", "denied"])

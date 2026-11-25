@@ -137,7 +137,11 @@ def _permission_for(decision: Decision) -> tuple[str, str]:
         return "deny", f"Blocked by TrustGate. {summarize(decision)}"
 
     if decision.effect is Effect.escalate:
-        return "ask", f"TrustGate requires human approval. {summarize(decision)}"
+        return (
+            "ask",
+            f"TrustGate requires human approval (request {decision.request_id}). "
+            f"{summarize(decision)}",
+        )
 
     # modify: V1 refuses rather than rewriting. Silently altering a command the
     # agent believes it ran is its own kind of unsafe, and the agent would

@@ -295,3 +295,24 @@ def test_resolve_needs_an_approver_name():
 
     with pytest.raises(SystemExit):
         cli.build_parser().parse_args(["guardroom", "resolve", "r1", "approved"])
+
+
+def test_pending_lists_held_actions_and_the_hook_names_the_id(room, tmp_path, capsys):
+    from trustgate.api import cli
+
+    _state, run, _cfg, _ = room
+    hook = _thin_copy(tmp_path, run)
+    out = _run_hook(hook, "Bash", {"command": "terraform destroy"})
+    assert out["permissionDecision"] == "ask" and "(request " in out["permissionDecisionReason"]
+    rid = out["permissionDecisionReason"].split("(request ")[1].split(")")[0]
+
+    items = daemon.request(run / "agent.sock", {"op": "pending"})["pending"]
+    assert [i["request_id"] for i in items] == [rid]
+    assert items[0]["rule"] == "prod-changes-need-approval"
+
+    assert cli.main(["guardroom", "pending", "--run", str(run)]) == 0
+    assert rid in capsys.readouterr().out
+
+    daemon.request(run / "admin.sock", {"op": "resolve", "request_id": rid,
+                                        "outcome": "denied", "approver": "p"})
+    assert daemon.request(run / "agent.sock", {"op": "pending"})["pending"] == []

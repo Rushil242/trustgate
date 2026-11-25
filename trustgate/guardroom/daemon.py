@@ -39,7 +39,7 @@ from trustgate.core.engine import Engine
 from trustgate.guardroom.peer import peer_uid
 
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
-AGENT_OPS = frozenset({"decide", "observe", "status"})
+AGENT_OPS = frozenset({"decide", "observe", "status", "pending"})
 ADMIN_OPS = AGENT_OPS | {"resolve", "policy-install"}
 
 
@@ -173,6 +173,29 @@ class GuardRoom:
             return getattr(self, "op_" + op.replace("-", "_"))(request, caller_uid)
         except Exception as exc:  # noqa: BLE001 - the daemon must keep running
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    def op_pending(self, request: dict, caller_uid: int | None) -> dict:
+        """Held actions nobody has answered: id, time, redacted action, rule.
+
+        Safe on agent.sock: it shows only what the log already stores in the
+        clear (the redacted summary), and knowing an id lets nobody approve it.
+        """
+        answered = set(self.ledger._answers)
+        items = []
+        for entry in self.ledger.open_escalations():
+            rid = entry.get("request_id", "")
+            if rid in answered:
+                continue
+            reasons = entry.get("reasons") or []
+            items.append({
+                "request_id": rid,
+                "ts_ms": entry.get("ts_ms"),
+                "ts": entry.get("ts"),
+                "action": entry.get("action_redacted", ""),
+                "rule": reasons[0].get("rule_id", "") if reasons else "",
+                "caller": (entry.get("principal") or {}).get("id", ""),
+            })
+        return {"ok": True, "pending": items}
 
     def op_status(self, request: dict, caller_uid: int | None) -> dict:
         return {
