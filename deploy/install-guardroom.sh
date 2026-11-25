@@ -275,9 +275,14 @@ fi
 
 say "checking it answers you, as a different user"
 if [ "$DRY_RUN" -eq 0 ]; then
-    for _ in $(seq 1 50); do [ -S "$RUN/agent.sock" ] && break; sleep 0.2; done
+    # Wait until the new daemon answers. The socket file alone is not enough:
+    # the old one is still on disk until the new daemon replaces it.
     ASK_AS="${SUDO_USER:-nobody}"
-    STATUS="$(sudo -u "$ASK_AS" "$VENV/bin/trustgate" guardroom status --prod)"
+    STATUS=""
+    for _ in $(seq 1 50); do
+        STATUS="$(sudo -u "$ASK_AS" "$VENV/bin/trustgate" guardroom status --prod 2>/dev/null)" && break
+        sleep 0.2
+    done
     echo "$STATUS"
     echo "$STATUS" | grep -q '"protection_level": 1' || {
         echo "WARNING: the daemon did not report protection level 1 to $ASK_AS" >&2; exit 1; }
