@@ -1,8 +1,10 @@
 # Contributing to TrustGate
 
-The single most valuable contribution is **a bypass** — an action the shipped
-policy should stop and doesn't. Read [SECURITY.md](SECURITY.md) first if you
-have found one; do not open a public issue for it.
+The single most valuable contribution is **a bypass**: an action the shipped
+policy should stop and doesn't. A gap in the default rules is part of the
+public [Break TrustGate](CHALLENGE.md) challenge: add one file to
+`redteam/community/`. A flaw that makes the gate fail open, crash or leak
+secrets goes privately through [SECURITY.md](SECURITY.md) instead.
 
 Everything else is welcome as a normal issue or PR.
 
@@ -61,7 +63,10 @@ Then: `uv run trustgate validate <policy>` and `uv run trustgate test`.
 
 ## Adding a payload
 
-`redteam/payloads.coding.json` and `payloads.voice.json`. Attacks need a
+Outside attacks go in `redteam/community/`, one YAML file each. Copy
+`redteam/community/_template.yaml`; the rules are in [CHALLENGE.md](CHALLENGE.md).
+
+The built-in suite lives in `redteam/payloads.coding.json` and `payloads.voice.json`. Attacks need a
 `category`; controls use `category: "control"` and should carry a `trap` note
 explaining what naive rule they are designed to catch.
 

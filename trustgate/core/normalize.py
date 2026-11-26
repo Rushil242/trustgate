@@ -42,7 +42,7 @@ _OPERATORS = re.compile(
 )
 
 # Keys whose values are paths in the tool schemas adapters map from.
-_PATH_PARAM_KEYS = frozenset(
+PATH_PARAM_KEYS = frozenset(
     {
         "file_path",
         "filepath",
@@ -58,6 +58,7 @@ _PATH_PARAM_KEYS = frozenset(
         "output_path",
         "config",
         "config_path",
+        "glob",  # Grep(glob=".env*") names files to read, by pattern
     }
 )
 
@@ -147,7 +148,7 @@ def extract_paths(action_type: str, tool: str, params: dict, raw: str) -> list[s
     for key, value in (params or {}).items():
         if not isinstance(value, str) or not value:
             continue
-        if key.lower() in _PATH_PARAM_KEYS or _looks_like_path(value):
+        if key.lower() in PATH_PARAM_KEYS or _looks_like_path(value):
             paths.append(normalize_path(value))
 
     if action_type == "shell" or tool.lower() in ("bash", "shell", "sh", "run"):
@@ -185,17 +186,54 @@ def path_matches_glob(path: str, pattern: str) -> bool:
     candidates = {path, normalize_path(path), posixpath.basename(path)}
     if path.startswith("~/"):
         candidates.add(path[2:])
+    candidates = {c.lower() for c in candidates if c}
 
-    patterns = {pattern}
+    patterns = {pattern.lower()}
     if pattern.startswith("**/"):
-        patterns.add(pattern[3:])
+        patterns.add(pattern[3:].lower())
 
+    # Case-insensitive on purpose: the default macOS disk is, so `cat .ENV`
+    # reads `.env`. On a case-sensitive disk this only errs on the safe side.
     return any(
-        fnmatch.fnmatch(candidate, pat)
-        for candidate in candidates
-        if candidate
-        for pat in patterns
+        fnmatch.fnmatchcase(candidate, pat) for candidate in candidates for pat in patterns
     )
+
+
+def matches_globs(path: str, globs: list[str]) -> bool:
+    """Match against a glob list where entries starting with `!` exclude.
+
+    `["**/.env.*", "!**/.env.example"]` protects `.env.production` and leaves
+    the example file, which exists to be committed, alone.
+    """
+    include = [g for g in globs if not g.startswith("!")]
+    exclude = [g[1:] for g in globs if g.startswith("!")]
+    return any(path_matches_glob(path, g) for g in include) and not any(
+        path_matches_glob(path, g) for g in exclude
+    )
+
+
+_GLOB_CHARS = re.compile(r"[*?\[]")
+
+
+def glob_could_match(token: str, names: tuple[str, ...]) -> str:
+    """A shell glob that could expand to one of `names`, or "".
+
+    `cat .en*` is expanded by the shell after the gate has looked, so the gate
+    has to ask what the star could become. Only globs that aim at something
+    are considered: a literal prefix of two or more characters (`id_*`,
+    `cred*`) or a leading dot (`.*`, `.en?`). A bare `*` or `*.json` is too
+    broad to mean a secret and would flag ordinary work.
+    """
+    if not _GLOB_CHARS.search(token):
+        return ""
+    base = posixpath.basename(token.rstrip("/")) or token
+    prefix = _GLOB_CHARS.split(base, 1)[0]
+    if len(prefix) < 2 and not base.startswith("."):
+        return ""
+    for name in names:
+        if fnmatch.fnmatchcase(name.lower(), base.lower()):
+            return name
+    return ""
 
 
 # --------------------------------------------------------------------------
@@ -264,6 +302,28 @@ def is_recursive_force_delete(command: str) -> bool:
     return recursive and force
 
 
+def is_recursive_delete(command: str) -> bool:
+    """Whether the command is an `rm` with a recursive flag, force or not."""
+    tokens = shell_tokens(command)
+    if not any(posixpath.basename(t).lower() == "rm" for t in tokens):
+        return False
+    for token in tokens:
+        if token.startswith("--"):
+            if token[2:].lower() == "recursive":
+                return True
+        elif token.startswith("-") and any(ch in token[1:] for ch in _RM_RECURSIVE_FLAGS):
+            return True
+    return False
+
+
+_HOME_FORMS = re.compile(r"^(?:\$HOME|\$\{HOME\}|\$\{HOME:-[^}]*\})(?=/|$)")
+
+
+def _home_normalized(target: str) -> str:
+    """`$HOME/x`, `${HOME}/x` and `${HOME:-/}/x` all mean `~/x`."""
+    return _HOME_FORMS.sub("~", target)
+
+
 def is_dangerous_delete(command: str) -> tuple[bool, str]:
     """Whether a delete would hit a path that must never be recursively removed.
 
@@ -274,18 +334,24 @@ def is_dangerous_delete(command: str) -> tuple[bool, str]:
     Blocking both — which a bare `rm -rf` pattern does — trains developers to
     disable the gate, so the target is what decides.
     """
-    if not is_recursive_force_delete(command):
+    # `-f` only silences prompts. `rm -r ~/Documents` deletes the same files,
+    # so recursion alone decides; the target list is what keeps
+    # `rm -r node_modules` allowed.
+    if not is_recursive_delete(command):
         return False, ""
 
-    for target in rm_targets(command):
+    for raw_target in rm_targets(command):
+        target = _home_normalized(raw_target)
+        while target.startswith("./") and len(target) > 2:
+            target = target[2:]  # `./*` deletes the same as `*`
         normalized = target.rstrip("/") or "/"
         if target in _PROTECTED_DELETE_TARGETS or normalized in _PROTECTED_DELETE_TARGETS:
-            return True, target
+            return True, raw_target
         # An absolute path outside the working tree, or any escape upward.
         if target.startswith(("/", "~")) or normalized.startswith(".."):
-            return True, target
+            return True, raw_target
         # A bare glob deletes everything in the current directory.
         if normalized in ("*", ".*"):
-            return True, target
+            return True, raw_target
 
     return False, ""

@@ -48,6 +48,39 @@ PATTERNS: dict[str, re.Pattern[str]] = {
     "email": re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]*[A-Za-z]\b"),
 }
 
+# Secrets recognised by where they sit, not by their shape: the value after
+# `-p` for mysql, after `Bearer`, after `--password`, or after `NAME_TOKEN=`.
+# Only the value is replaced; the label stays, so the log still says what kind
+# of thing was there. These redact the log only. They do not make the Secret
+# Guard refuse an action, because `export API_TOKEN=$(vault read ...)` is
+# normal and holds no literal secret.
+CONTEXT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("bearer", re.compile(r"(?i)(\bBearer\s+)([A-Za-z0-9._~+/=-]{8,})")),
+    ("password_flag", re.compile(r"(--password[=\s]+)(['\"]?)([^\s'\"]+)")),
+    (
+        "mysql_password",
+        re.compile(r"(\b(?:mysql|mysqldump|mysqladmin|mariadb)\b[^\n|;&]*?\s-p)([^\s'\"]+)"),
+    ),
+    (
+        "assigned_secret",
+        re.compile(
+            r"(?i)(\b[A-Za-z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|APIKEY|PRIVATE_KEY)"
+            r"[A-Za-z0-9_]*\s*=\s*)(['\"]?)(?![$<])([^\s'\"]+)"
+        ),
+    ),
+)
+
+
+def _redact_in_context(text: str) -> str:
+    for name, pattern in CONTEXT_PATTERNS:
+        marker = f"<REDACTED:{name}>"
+        if pattern.groups == 2:
+            text = pattern.sub(lambda m, k=marker: m.group(1) + k, text)
+        else:
+            text = pattern.sub(lambda m, k=marker: m.group(1) + m.group(2) + k, text)
+    return text
+
+
 # Payment cards get their own pass: a bare digit-run regex is far too eager
 # (it matches phone numbers, order ids, epoch timestamps), so candidates are
 # length-checked against real card lengths and Luhn-verified.
@@ -93,7 +126,7 @@ def redact(text: str) -> str:
         return text
     for name, pattern in PATTERNS.items():
         text = pattern.sub(f"<REDACTED:{name}>", text)
-    return _redact_cards(text)
+    return _redact_cards(_redact_in_context(text))
 
 
 def detect(text: str) -> list[str]:

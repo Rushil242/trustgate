@@ -1,0 +1,62 @@
+{
+  "about": "Fixed test vectors for TrustGate ledger version 2. See docs/LEDGER-FORMAT.md.",
+  "seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "public_key_b64": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+  "key_id": "ed25519:56475aa75463474c",
+  "canonical_bytes_of_entry_0": "{\"action_digest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"action_redacted\":\"cat .env\",\"correlation_id\":\"\",\"effect\":\"block\",\"engine_version\":\"0.3.0.dev0\",\"key_id\":\"ed25519:56475aa75463474c\",\"kind\":\"decision\",\"policy_digest\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"prev_hash\":\"\",\"principal\":{\"id\":\"unix:501\",\"roles\":[\"developer\"]},\"protection_level\":1,\"reasons\":[{\"guard\":\"action\",\"message\":\"Never read secret files. caf\\u00e9\",\"rule_id\":\"protect-secrets\",\"severity\":\"critical\"}],\"request_id\":\"req-0\",\"seq\":0,\"surface\":\"coding\",\"ts_ms\":1764000000000,\"v\":2}",
+  "entries": [
+    {
+      "seq": 0,
+      "kind": "decision",
+      "v": 2,
+      "key_id": "ed25519:56475aa75463474c",
+      "request_id": "req-0",
+      "correlation_id": "",
+      "ts_ms": 1764000000000,
+      "surface": "coding",
+      "principal": {
+        "id": "unix:501",
+        "roles": [
+          "developer"
+        ]
+      },
+      "action_redacted": "cat .env",
+      "action_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "engine_version": "0.3.0.dev0",
+      "protection_level": 1,
+      "effect": "block",
+      "reasons": [
+        {
+          "guard": "action",
+          "rule_id": "protect-secrets",
+          "message": "Never read secret files. caf\u00e9",
+          "severity": "critical"
+        }
+      ],
+      "prev_hash": "",
+      "entry_hash": "2f216086ebd1459ef9a2e482b9dbdf4f06f8a87f13afb0b17b23c897f47797a5",
+      "sig": "lFr2Vsg/ONnc5IUQpqK1SCb1CQmg2oLUd+uHjcg3iICw0egUnSzP80GAE0I6WLRa3rdjtysiFfEiG1U+ujGCDQ=="
+    },
+    {
+      "seq": 1,
+      "kind": "resolution",
+      "v": 2,
+      "key_id": "ed25519:56475aa75463474c",
+      "request_id": "req-0",
+      "correlation_id": "",
+      "ts_ms": 1764000001500,
+      "outcome": "denied",
+      "approver": {
+        "id": "priya",
+        "method": "guard room admin socket, OS user unix:501"
+      },
+      "detail": "",
+      "gated": true,
+      "engine_version": "0.3.0.dev0",
+      "prev_hash": "2f216086ebd1459ef9a2e482b9dbdf4f06f8a87f13afb0b17b23c897f47797a5",
+      "entry_hash": "5ea41bba775204a06f34984100f8df4a51880f1e19f99f2590bd64ad83b86d6a",
+      "sig": "iI1pKVaEv8O52Jg1zyMFZV1SBnCaZdaORRtFFsK3tN3+eDOmN7LYUsy738ZeJyvUy//KiUZi6rPttx4BbQBoCQ=="
+    }
+  ]
+}

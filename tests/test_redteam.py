@@ -84,3 +84,28 @@ def test_controls_are_a_meaningful_share_of_the_suite(results):
     # blocks everything would score perfectly.
     controls = [r for r in results if r.is_control]
     assert len(controls) >= 10
+
+
+def test_the_shipped_hook_config_scores_the_same_as_the_suite(tmp_path):
+    """The benchmark and the product must be the same configuration.
+
+    The suite builds its engine with no judge. The installed hook builds its
+    engine from the default `Config`, whose judge provider is `fake`. If those
+    two ever disagree, a red-team number describes a product nobody ships.
+    """
+    from trustgate.adapters.coding.claude_code_hook import _build_engine
+    from trustgate.core.config import Config
+
+    cfg = Config()  # shipped defaults, no config file, no environment
+    assert cfg.judge.enabled and cfg.judge.provider == "fake"
+    cfg.constitution_path = str(POLICY)
+    cfg.audit_path = str(tmp_path / "audit.jsonl")
+    engine = _build_engine(cfg)
+    assert engine.judge is None, "the always-yes fake judge must not be built"
+
+    suite = {r.name: r.actual for r in runner.run(POLICY)}
+    cases = runner.load_cases(runner.DEFAULT_PAYLOADS) + runner.load_community(
+        runner.COMMUNITY_DIR, "coding"
+    )
+    shipped = {c["name"]: engine.decide(runner.case_to_request(c)).effect.value for c in cases}
+    assert shipped == suite

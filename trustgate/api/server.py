@@ -54,7 +54,7 @@ def build_app(config: Config | None = None) -> FastAPI:
             raise RuntimeError(f"cannot start without a valid constitution: {exc}") from exc
 
         judge = (
-            ConstitutionGuard(constitution, build_llm(cfg.judge)) if cfg.judge.enabled else None
+            ConstitutionGuard(constitution, build_llm(cfg.judge)) if cfg.judge.active else None
         )
         _state["config"] = cfg
         _state["constitution"] = constitution
@@ -83,7 +83,7 @@ def build_app(config: Config | None = None) -> FastAPI:
             "principles": len(constitution.principles),
             "deterministic": len(constitution.deterministic_principles),
             "reasoning": len(constitution.reasoning_principles),
-            "judge": cfg.judge.provider if cfg.judge.enabled else "disabled",
+            "judge": cfg.judge.provider if cfg.judge.active else "disabled",
         }
 
     @app.post("/v1/decide", response_model=Decision)

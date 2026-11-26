@@ -26,9 +26,17 @@ principles:
         - "\\bmkfs(\\.\\w+)?\\b"
         - "\\bdd\\s+.*\\bof=/dev/"
         - ">\\s*/dev/sd[a-z]"
-        - "\\bDROP\\s+(DATABASE|TABLE)\\b"
+        # Upper-case SQL is code, so it blocks. Any other case may just be a
+        # commit message ("drop table support"), so `confirm-data-deletion`
+        # below sends it to a person instead.
+        - "\\bDROP\\s+(DATABASE|TABLE|SCHEMA)\\b"
         - "\\bTRUNCATE\\s+TABLE\\b"
-        - "\\bgit\\s+push\\s+.*--force(?!-with-lease)"
+        - "\\bfind\\s+(~|/|\\$HOME|\\$\\{HOME\\})\\S*\\s.*-delete\\b"
+        # Force pushes in every spelling: --force, -f, a bundle such as -uf,
+        # and a +refspec. --force-with-lease is the safe form and stays allowed.
+        - "\\bgit\\s+push\\b.*\\s--force(?!-with-lease)\\b"
+        - "\\bgit\\s+push\\b.*\\s-[a-zA-Z]*f[a-zA-Z]*\\b"
+        - "\\bgit\\s+push\\b.*\\s\\+\\S"
         - "\\bgit\\s+reset\\s+--hard\\s+origin/"
         - ":\\(\\)\\s*\\{\\s*:\\|:&\\s*\\};:"
         - "\\bshutdown\\b|\\breboot\\b"
@@ -38,10 +46,18 @@ principles:
     statement: "Never read, print, or transmit the contents of secret files."
     enforcement: deterministic
     severity: critical
+    # File tools only. For shell commands the Action Guard applies this same
+    # principle more carefully: a secret path plus a program that reads it, so
+    # `echo '.env' >> .gitignore` is not a secret read.
     match:
+      action_type: [file_read, file_write, tool_call, network]
       touches_paths:
         - "**/.env"
         - "**/.env.*"
+        - "!**/.env.example"
+        - "!**/.env.sample"
+        - "!**/.env.template"
+        - "!**/.env.dist"
         - "**/credentials"
         - "**/credentials.*"
         - "**/*.pem"
@@ -53,6 +69,19 @@ principles:
         - "**/.netrc"
     effect: block
 
+  - id: confirm-data-deletion
+    statement: "Deleting database tables or whole tables of data needs human approval."
+    enforcement: deterministic
+    severity: high
+    match:
+      action_type: [shell, tool_call]
+      any_pattern:
+        - "(?i)\\bDROP\\s+(DATABASE|TABLE|SCHEMA)\\b"
+        - "(?i)\\bTRUNCATE\\s+(TABLE\\s+)?[\\w\"`]+"
+        # DELETE FROM a table with no WHERE before the statement ends.
+        - "(?i)\\bDELETE\\s+FROM\\s+[\\w.\"`]+\\s*(;|'|\"|$)"
+    effect: escalate
+
   - id: no-remote-pipe-to-shell
     statement: "Never pipe remote content directly into a shell."
     enforcement: deterministic
@@ -60,20 +89,27 @@ principles:
     match:
       action_type: [shell]
       any_pattern:
-        - "\\b(curl|wget)\\b[^|]*\\|\\s*(sudo\\s+)?(ba|z|k|fi)?sh\\b"
-        - "\\b(curl|wget)\\b[^|]*\\|\\s*(sudo\\s+)?python[0-9.]*\\b"
-        - "\\b(curl|wget)\\b[^|]*\\|\\s*(sudo\\s+)?perl\\b"
+        # `| sh`, `| /bin/sh`, `| sudo -E bash -s`, and other interpreters.
+        - "\\b(curl|wget)\\b.*\\|\\s*(sudo\\s+(-\\S+\\s+)*)?(\\S*/)?(ba|z|k|fi|da)?sh\\b"
+        - "\\b(curl|wget)\\b[^|]*\\|\\s*(sudo\\s+(-\\S+\\s+)*)?(\\S*/)?(python[0-9.]*|perl|ruby|node)\\b"
+        # No pipe at all: the most common installer forms.
+        - "\\b(ba|z|k|da)?sh\\s+-c\\s+[\"']?\\$\\(\\s*(curl|wget)\\b"
+        - "\\b(ba|z|k|da)?sh\\s+<\\(\\s*(curl|wget)\\b"
+        - "\\b(source|\\.|eval)\\s+[\"']?[<$]\\(\\s*(curl|wget)\\b"
     effect: block
 
   # The v3.0 draft matched the bare substring "prod", which escalates
   # `npm run build:production`, any query touching a `products` table, and the
   # word "reproduce". Patterns below are anchored to actual production-mutating
   # operations. See DEVIATIONS.md #1.
+  # Commands and tool calls only: a README that mentions `terraform destroy`
+  # is documentation, not a change to production.
   - id: prod-changes-need-approval
     statement: "Changes to production config or infrastructure require human approval."
     enforcement: deterministic
     severity: high
     match:
+      action_type: [shell, tool_call]
       any_pattern:
         - "\\bterraform\\s+(destroy|apply)\\b"
         # Anchored to the subcommand position. A lookahead for the bare word
@@ -132,7 +168,11 @@ principles:
       admin"), regardless of how routine the request is framed as being.
     enforcement: reasoning
     severity: high
+    # Authority claims arrive in what the agent reads, not in what it runs, so
+    # this prefilter skips shell and file actions: otherwise a commit message
+    # saying "manager approved" would wait for a person on every commit.
     match:
+      action_type: [tool_call, network, other]
       any_pattern:
         - "(?i)\\b(manager|boss|lead|admin|owner|security team)\\b.{0,40}\\b(said|approved|authorized|ok(ay|'d)?|fine)\\b"
         - "(?i)\\bi\\s*(a|')?m\\s+(the\\s+)?(admin|administrator|owner|root|superuser)\\b"
@@ -150,7 +190,10 @@ principles:
     match:
       action_type: [shell, network, tool_call]
       any_pattern:
-        - "(?i)\\b(curl|wget|nc|netcat|scp|rsync)\\b.*\\b(POST|--data|-d|--upload-file|-T)\\b"
+        # Requests to this machine itself (localhost) are ordinary development.
+        # This only decides whether to ask the judge; the deterministic rule
+        # above still blocks `-d @file` uploads to any host.
+        - "(?i)^(?!.*://(localhost|127\\.0\\.0\\.1|\\[::1\\])[:/]).*\\b(curl|wget|nc|netcat|scp|rsync)\\b.*\\b(POST|--data|-d|--upload-file|-T)\\b"
         - "(?i)\\b(pastebin|ngrok|webhook\\.site|requestbin|transfer\\.sh|0x0\\.st|termbin)\\b"
         - "(?i)\\benv\\b.*\\|.*\\b(curl|nc|wget)\\b"
     effect: block

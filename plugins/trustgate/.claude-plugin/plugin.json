@@ -1,0 +1,11 @@
+{
+  "name": "trustgate",
+  "displayName": "TrustGate",
+  "version": "0.2.0",
+  "description": "Checks every tool call against plain-English rules before it runs, and keeps a tamper-evident record. Blocks reading secret files, destructive commands and piping remote scripts into a shell by default.",
+  "author": { "name": "Rushil", "url": "https://github.com/Rushil242" },
+  "homepage": "https://github.com/Rushil242/trustgate",
+  "repository": "https://github.com/Rushil242/trustgate",
+  "license": "MIT",
+  "keywords": ["security", "guardrails", "hooks", "audit-log", "prompt-injection"]
+}

@@ -139,15 +139,25 @@ class TestWaitForDecision:
         assert ledger.read_all() == []
 
     def test_an_unreadable_outcome_is_not_an_approval(self, ledger, tmp_path):
-        ledger.write_resolution("req-1", Outcome.approved, Approver(id="priya"))
-        path = tmp_path / "audit.jsonl"
-        path.write_text(
-            path.read_text(encoding="utf-8").replace('"approved"', '"yes-go-ahead"'),
-            encoding="utf-8",
-        )
+        # A properly chained line whose outcome this build does not know.
+        ledger._append(lambda seq, prev: {
+            "seq": seq, "kind": "resolution", "request_id": "req-1", "ts": 1.0,
+            "outcome": "yes-go-ahead", "approver": {"id": "priya"}, "prev_hash": prev,
+        })
 
         result = wait_for_decision(ledger, "req-1", timeout=1)
         assert result.outcome is Outcome.unknown
+        assert not result.approved
+
+    def test_an_edited_answer_is_not_an_approval(self, ledger, tmp_path):
+        ledger.write_resolution("req-1", Outcome.denied, Approver(id="priya"))
+        path = tmp_path / "audit.jsonl"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace('"denied"', '"approved"'),
+            encoding="utf-8",
+        )
+
+        result = wait_for_decision(ledger, "req-1", timeout=0.2, poll_interval=0.05)
         assert not result.approved
 
     @pytest.mark.parametrize(

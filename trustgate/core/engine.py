@@ -26,6 +26,7 @@ from trustgate.core.guards.secret import SecretGuard
 from trustgate.core.guards.supply_chain import SupplyChainGuard
 from trustgate.core.models import (
     ActionRequest,
+    ActionType,
     Decision,
     Effect,
     Reason,
@@ -44,10 +45,13 @@ class Engine:
         audit: AuditLedger | None = None,
         judge: ConstitutionGuard | None = None,
         guards: list[Guard] | None = None,
+        policy_trusted: bool = True,
     ) -> None:
         self.c = constitution
         self.audit = audit
         self.judge = judge
+        self.policy_trusted = policy_trusted
+        """False when the policy file's hash was never pinned. See core/pins.py."""
         self.det_guards: list[Guard] = guards if guards is not None else [
             ContextGuard(constitution),
             ActionGuard(constitution),
@@ -55,7 +59,7 @@ class Engine:
             SupplyChainGuard(constitution),
         ]
 
-    def decide(self, req: ActionRequest) -> Decision:
+    def decide(self, req: ActionRequest, stamps: dict | None = None) -> Decision:
         t0 = time.perf_counter()
 
         reasons: list[Reason] = []
@@ -109,6 +113,41 @@ class Engine:
                     )
                 )
 
+        if (
+            req.action.type is ActionType.tool_call
+            and self.c.unknown_tools != "allow"
+            and not self.c.knows_tool(req.action.tool)
+        ):
+            verdict = combine_verdicts(verdict, Verdict(self.c.unknown_tools))
+            reasons.append(
+                Reason(
+                    guard="engine",
+                    rule_id="unknown-tool",
+                    message=(
+                        f"The policy has no rule for the tool {req.action.tool!r}, and it "
+                        f"says unknown tools {self.c.unknown_tools}"
+                    ),
+                    severity="high",
+                )
+            )
+
+        if not self.policy_trusted and verdict is not Verdict.block:
+            # Rules nobody approved cannot be the reason an action runs. A
+            # block in them still stands; anything else goes to a person.
+            verdict = combine_verdicts(verdict, Verdict.escalate)
+            reasons.append(
+                Reason(
+                    guard="engine",
+                    rule_id="policy-not-pinned",
+                    message=(
+                        "The policy file has changed since it was last approved "
+                        f"({self.c.digest or 'no hash'}). If you made this change, "
+                        "run `trustgate pin-policy` yourself to approve it."
+                    ),
+                    severity="high",
+                )
+            )
+
         effect = verdict_to_effect(verdict)
         if effect is Effect.escalate:
             obligations.append("require_human_approval")
@@ -123,7 +162,7 @@ class Engine:
         )
 
         if self.audit is not None:
-            self.audit.write(req, decision)
+            self.audit.write(req, decision, policy_digest=self.c.digest, stamps=stamps)
 
         return decision
 

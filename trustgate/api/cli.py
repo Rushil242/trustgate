@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import UTC
 from pathlib import Path
@@ -42,7 +43,7 @@ def _load_engine(args: argparse.Namespace):
     constitution = Constitution.from_file(cfg.constitution_path)
 
     judge = None
-    if cfg.judge.enabled:
+    if cfg.judge.active:
         from trustgate.core.guards.constitution_llm import ConstitutionGuard
         from trustgate.core.llm import build_llm
 
@@ -89,10 +90,25 @@ def cmd_verify_audit(args: argparse.Namespace) -> int:
 
     cfg = Config.load()
     path = args.audit or cfg.audit_path
-    result = AuditLedger(path).verify()
+    keys = None
+    if args.pubkey:
+        # `key_id=base64` pairs, or a bare base64 key (its id is computed).
+        from trustgate.core.signing import key_id_for
+
+        keys = {}
+        for item in args.pubkey:
+            if "=" in item and item.startswith("ed25519:"):
+                key_id, public = item.split("=", 1)
+            else:
+                import base64
+
+                public = item
+                key_id = key_id_for(base64.b64decode(item))
+            keys[key_id] = public
+    result = AuditLedger(path).verify(public_keys=keys)
 
     if result.ok:
-        print(f"OK  chain intact — {result.entries_checked} entries verified ({path})")
+        print(f"OK  {result.detail}: {result.entries_checked} entries verified ({path})")
         return EXIT_OK
 
     print(f"FAIL  chain broken at seq {result.broken_seq} ({path})", file=sys.stderr)
@@ -110,7 +126,7 @@ def cmd_pending(args: argparse.Namespace) -> int:
     """
     import time
 
-    from trustgate.core.audit import AuditLedger
+    from trustgate.core.audit import AuditLedger, entry_time
     from trustgate.core.config import Config
 
     cfg = Config.load()
@@ -124,7 +140,7 @@ def cmd_pending(args: argparse.Namespace) -> int:
     now = time.time()
     print(f"{len(open_items)} escalation(s) awaiting a decision ({path})\n")
     for entry in open_items:
-        age = now - float(entry.get("ts", now))
+        age = now - (entry_time(entry) or now)
         rule = ""
         reasons = entry.get("reasons") or []
         if reasons:
@@ -299,6 +315,165 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_pin_policy(args: argparse.Namespace) -> int:
+    """Approve the exact bytes of a policy file, so the hook will trust it."""
+    from trustgate.core.config import Config
+    from trustgate.core.constitution import Constitution, ConstitutionError
+    from trustgate.core.pins import is_trusted, load_pins, pin, pins_path
+
+    if args.list:
+        pins = load_pins()
+        if not pins:
+            print(f"no pinned policies in {pins_path()}")
+        for digest, info in pins.items():
+            print(f"{digest}  {info.get('path', '')}")
+        return EXIT_OK
+
+    path = Path(args.path or Config.load().constitution_path)
+    try:
+        constitution = Constitution.from_file(path)
+    except ConstitutionError as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_ERROR
+
+    if is_trusted(constitution.digest):
+        print(f"already trusted: {path}\n  {constitution.digest}")
+        return EXIT_OK
+
+    print(f"policy:     {path}")
+    print(f"name:       {constitution.metadata.name}")
+    print(f"principles: {len(constitution.principles)}")
+    print(f"hash:       {constitution.digest}")
+    if not args.yes:
+        print("Read the file first. Pin these exact bytes? [y/N] ", end="", flush=True)
+        if sys.stdin.readline().strip().lower() not in ("y", "yes"):
+            print("not pinned")
+            return EXIT_DENIED
+    pin(path, note=args.note or "")
+    print(f"pinned in {pins_path()}")
+    return EXIT_OK
+
+
+DEV_GUARDROOM = Path.home() / ".trustgate" / "guardroom"
+
+
+def prod_dirs(platform: str | None = None) -> tuple[Path, Path]:
+    """Where the guard room lives when it runs as its own OS user.
+
+    macOS clears /var/run at boot and a daemon running as `_trustgate` cannot
+    recreate it, so on macOS both folders sit under Application Support,
+    created once by the installer. On Linux systemd makes /run/trustgate at
+    every start (RuntimeDirectory) and keeps /var/lib/trustgate (StateDirectory).
+    """
+    if (platform or sys.platform) == "darwin":
+        base = Path("/Library/Application Support/TrustGate")
+        return base / "state", base / "run"
+    return Path("/var/lib/trustgate"), Path("/run/trustgate")
+
+
+def _guardroom_dirs(args: argparse.Namespace) -> tuple[Path, Path]:
+    if args.prod:
+        state, run = prod_dirs()
+        return Path(args.state or state), Path(args.run or run)
+    return Path(args.state or DEV_GUARDROOM / "state"), Path(args.run or DEV_GUARDROOM / "run")
+
+
+def cmd_guardroom(args: argparse.Namespace) -> int:
+    """Run or talk to the guard room daemon."""
+    from trustgate.guardroom import daemon
+
+    state, run = _guardroom_dirs(args)
+    if args.action == "serve":
+        import signal
+        import threading
+
+        from trustgate.core.config import Config
+
+        daemon.serve(state, run, Config.load())
+        print(f"trustgated: state {state}, sockets in {run}", file=sys.stderr)
+        stop = threading.Event()
+        signal.signal(signal.SIGTERM, lambda *_: stop.set())
+        try:
+            stop.wait()
+        except KeyboardInterrupt:
+            pass
+        return EXIT_OK
+
+    if args.action == "install-hook":
+        return _install_thin_hook(args, run)
+
+    admin_ops = ("resolve", "policy-install")
+    sock = run / ("admin.sock" if args.action in admin_ops else "agent.sock")
+    message = {"op": "pending" if args.action == "pending" else "status"}
+    if args.action == "policy-install":
+        if not args.policy:
+            print("policy-install needs --policy FILE and --by NAME", file=sys.stderr)
+            return EXIT_ERROR
+        message = {"op": "policy-install", "by": args.by or "",
+                   "policy_text": Path(args.policy).read_text(encoding="utf-8"),
+                   "note": args.note or ""}
+    if args.action == "resolve":
+        message = {"op": "resolve", "request_id": args.request_id, "outcome": args.outcome,
+                   "approver": args.approver, "note": args.note or ""}
+    try:
+        reply = daemon.request(sock, message)
+    except OSError as exc:
+        print(f"cannot reach the guard room at {sock}: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    if args.action == "pending" and reply.get("ok"):
+        items = reply.get("pending", [])
+        if not items:
+            print("nothing is waiting for an answer")
+        for item in items:
+            print(f"{item['request_id']}  {item['rule']:<28} {item['caller']:<10} {item['action']}")
+        if items:
+            print("\napprove or deny with:\n  sudo trustgate-admin guardroom resolve --prod "
+                  "REQUEST_ID approved|denied --approver \"Your Name\"")
+        return EXIT_OK
+    print(json.dumps(reply, indent=2))
+    return EXIT_OK if reply.get("ok") else EXIT_DENIED
+
+
+def _install_thin_hook(args: argparse.Namespace, run: Path) -> int:
+    """Copy the thin hook with its socket path and fallback baked in."""
+    from trustgate.guardroom import hook as thin
+
+    source = Path(thin.__file__).read_text(encoding="utf-8")
+    fallback = "deny" if args.prod else "ask"
+    text = source.replace(
+        'SOCKET = "/var/run/trustgate/agent.sock"', f"SOCKET = {str(run / 'agent.sock')!r}"
+    ).replace('FALLBACK = "deny"', f"FALLBACK = {fallback!r}")
+    dest = Path(args.dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(text, encoding="utf-8")
+    dest.chmod(0o755)
+    py = args.python or "/usr/bin/python3"
+    snippet = {
+        "hooks": {
+            "PreToolUse": [{"hooks": [{"type": "command",
+                                       "command": f"{py} -I {dest} pretooluse",
+                                       "timeout": 200}]}],
+            **{event: [{"hooks": [{"type": "command",
+                                   "command": f"{py} -I {dest} observe", "timeout": 15}]}]
+               for event in ("PostToolUse", "PostToolUseFailure", "PermissionDenied")},
+        }
+    }
+    if args.prod:
+        # Only hooks from managed settings run, so nothing in a project or the
+        # user's own settings can be added around this one; and nobody can
+        # start a session in bypass-permissions mode.
+        snippet["allowManagedHooksOnly"] = True
+        snippet["permissions"] = {"disableBypassPermissionsMode": "disable"}
+    if args.settings_out:
+        Path(args.settings_out).write_text(json.dumps(snippet, indent=2) + "\n",
+                                           encoding="utf-8")
+    print(f"wrote {dest} (socket {run / 'agent.sock'}, fallback {fallback})")
+    print("Add this to your Claude Code settings"
+          + (" (managed settings, owned by root)" if args.prod else "") + ":")
+    print(json.dumps(snippet, indent=2))
+    return EXIT_OK
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     """Install the agent hook and a starter constitution into a project."""
     from trustgate.adapters.coding.install import install, next_steps
@@ -378,17 +553,38 @@ def cmd_test(args: argparse.Namespace) -> int:
 
     payloads = args.payloads or str(runner.DEFAULT_PAYLOADS)
 
+    community_dir = None if args.no_community else (args.community_dir or runner.COMMUNITY_DIR)
+
     try:
-        results = runner.run(constitution_path, payloads, audit_path=args.audit)
-    except (ConstitutionError, OSError) as exc:
+        results = runner.run(
+            constitution_path, payloads, audit_path=args.audit, community_dir=community_dir
+        )
+    except (ConstitutionError, OSError, runner.CommunityFileError) as exc:
         print(str(exc), file=sys.stderr)
         return EXIT_ERROR
 
     print(f"constitution: {constitution_path}")
     print(f"payloads:     {payloads}")
+    n_community, bypasses = runner.community_counts(results)
+    if community_dir is not None:
+        print(f"community:    {n_community} case(s) from {community_dir}")
     print(runner.format_table(results))
 
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        annotations = runner.github_annotations(results)
+        for line in annotations:
+            print(line)
+        summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary and annotations:
+            with open(summary, "a", encoding="utf-8") as fh:
+                fh.write("## Break TrustGate: bypass found\n\n")
+                for line in annotations:
+                    fh.write(f"- {line.split('::', 2)[-1]}\n")
+                fh.write("\nSee CHALLENGE.md for what happens next.\n")
+
     missed, false_positives = runner.summarize(results)
+    if bypasses:
+        print(f"BYPASS FOUND  {bypasses} outside attack(s) got through", file=sys.stderr)
     if missed or false_positives:
         print(
             f"FAIL  {missed} missed attack(s), {false_positives} false positive(s)",
@@ -442,6 +638,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_verify = sub.add_parser("verify-audit", help="verify the audit hash chain")
     p_verify.add_argument("-a", "--audit", help="path to the audit ledger JSONL")
+    p_verify.add_argument("--pubkey", action="append",
+                          help="machine public key (base64) to check signatures; repeatable")
     p_verify.set_defaults(func=cmd_verify_audit)
 
     p_evidence = sub.add_parser(
@@ -489,6 +687,48 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_init.set_defaults(func=cmd_init)
 
+    p_pin = sub.add_parser(
+        "pin-policy", help="approve the exact bytes of a policy file so the hook trusts it"
+    )
+    p_pin.add_argument("path", nargs="?", help="policy file (default: the configured one)")
+    p_pin.add_argument("-y", "--yes", action="store_true", help="skip confirmation")
+    p_pin.add_argument("--note", help="why this change was made")
+    p_pin.add_argument("--list", action="store_true", help="show pinned policies")
+    p_pin.set_defaults(func=cmd_pin_policy)
+
+    p_gr = sub.add_parser("guardroom", help="run or talk to the guard room daemon")
+    gr = p_gr.add_subparsers(dest="action", required=True)
+
+    def gr_cmd(name: str, help_text: str) -> argparse.ArgumentParser:
+        # Each action has its own parser, so flags and arguments may come in
+        # any order: `resolve --prod ID approved` and `resolve ID approved --prod`.
+        p = gr.add_parser(name, help=help_text)
+        p.add_argument("--prod", action="store_true",
+                       help="the installed guard room, running as its own OS user")
+        p.add_argument("--state", help="state folder (policy, log, key)")
+        p.add_argument("--run", help="socket folder")
+        p.set_defaults(func=cmd_guardroom)
+        return p
+
+    gr_cmd("serve", "run the daemon")
+    gr_cmd("status", "ask the daemon how it is running")
+    gr_cmd("pending", "list held actions and their request ids")
+    p_res = gr_cmd("resolve", "approve or deny a held action (admin socket)")
+    p_res.add_argument("request_id", help="the escalation's request id")
+    p_res.add_argument("outcome", choices=["approved", "denied"])
+    p_res.add_argument("--approver", required=True, help="your name")
+    p_res.add_argument("--note", help="a note kept in the log")
+    p_pol = gr_cmd("policy-install", "replace the policy (admin socket)")
+    p_pol.add_argument("--policy", required=True, help="the new policy file")
+    p_pol.add_argument("--by", required=True, help="your name")
+    p_pol.add_argument("--note", help="why, kept in the log")
+    p_hook = gr_cmd("install-hook", "write the thin hook with its socket path baked in")
+    p_hook.add_argument("--dest", default=".claude/hooks/trustgate-guardroom.py",
+                        help="where to write the thin hook")
+    p_hook.add_argument("--python", help="python to run it with")
+    p_hook.add_argument("--settings-out",
+                        help="also write the Claude Code settings JSON to this file")
+
     p_approve = sub.add_parser(
         "approve", help="record the current hook/MCP configuration as reviewed"
     )
@@ -501,6 +741,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_test = sub.add_parser("test", help="run the red-team suite and print block rates")
     p_test.add_argument("--payloads", help="path to a payloads JSON file")
+    p_test.add_argument(
+        "--community-dir", help="folder of one-file community attacks (default: redteam/community)"
+    )
+    p_test.add_argument(
+        "--no-community", action="store_true", help="run only the built-in payloads"
+    )
     add_common(p_test)
     p_test.set_defaults(func=cmd_test)
 

@@ -260,13 +260,21 @@ class TestFailSafe:
 
     def test_modify_never_executes_the_tool(self, client):
         ran = []
-        tools = {"note": lambda **kw: ran.append(kw)}
+        tools = {"lookup_order": lambda **kw: ran.append(kw)}
 
         # A literal credential in the params trips the Secret Guard -> modify.
+        # A known tool, so the unknown-tools rule does not escalate it first.
         with pytest.raises(ActionBlocked):
             guarded_dispatch(
-                "note", {"text": "key AKIAIOSFODNN7EXAMPLE"}, tools=tools
+                "lookup_order", {"order_id": "key AKIAIOSFODNN7EXAMPLE"}, tools=tools
             )
+        assert not ran
+
+    def test_an_unknown_tool_never_executes(self, client):
+        ran = []
+        tools = {"wire_money": lambda **kw: ran.append(kw)}
+        with pytest.raises(NeedsHumanApproval):
+            guarded_dispatch("wire_money", {"to": "acct", "amount": 50000}, tools=tools)
         assert not ran
 
 

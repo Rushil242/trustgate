@@ -1,0 +1,7 @@
+# Digests of starter policies shipped in earlier releases. Trusted without a
+# pin, so an unchanged copy made by an older `trustgate init` keeps working.
+# Never add the digest of an empty or edited file here.
+sha256:008148389079316ba6fa18285f5bcc58a3919929abb953e794aab0d2d10fd0dd  starter.coding.yaml @899f048
+sha256:10853448a5526080587dbb57c9d733f5d2e9b476c605843101755d5acfa082f8  starter.voice.yaml @899f048
+sha256:25c36fabef9ba0df7dc006a831c19dce359a4bdfaeafe38bfd9a988ab82ad663  starter.voice.yaml @852f9e8
+sha256:32058ef8deb8448b21b1ec82e9ebb7c97804ebb1df24d406ff2a525049826edd  starter.coding.yaml @c57dc49

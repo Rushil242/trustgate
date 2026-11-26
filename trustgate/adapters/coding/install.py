@@ -57,7 +57,9 @@ if [ ! -x "$TRUSTGATE_PYTHON" ]; then
     TRUSTGATE_PYTHON="$(command -v python3 || command -v python)"
 fi
 
-exec "$TRUSTGATE_PYTHON" -m trustgate.adapters.coding.claude_code_hook
+# -P: never put the current directory on sys.path. Without it, a folder named
+# `trustgate/` in the project would be imported instead of the real package.
+exec "$TRUSTGATE_PYTHON" -P -m trustgate.adapters.coding.claude_code_hook
 """
 
 RESOLUTION_HOOK_SCRIPT = """#!/usr/bin/env bash
@@ -74,7 +76,9 @@ if [ ! -x "$TRUSTGATE_PYTHON" ]; then
     TRUSTGATE_PYTHON="$(command -v python3 || command -v python)"
 fi
 
-exec "$TRUSTGATE_PYTHON" -m trustgate.adapters.coding.resolution_hook
+# -P: never put the current directory on sys.path. Without it, a folder named
+# `trustgate/` in the project would be imported instead of the real package.
+exec "$TRUSTGATE_PYTHON" -P -m trustgate.adapters.coding.resolution_hook
 """
 
 
@@ -311,6 +315,8 @@ TrustGate is installed for Claude Code.
 
 Next:
   1. Read and edit the policy:  {root / CONSTITUTION_FILENAME}
+     After any edit, approve the new version, or every action will ask you:
+       trustgate pin-policy
   2. Approve your extension files (hooks, MCP servers):
        trustgate approve
   3. Check the suite passes against your policy:

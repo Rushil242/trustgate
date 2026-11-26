@@ -23,6 +23,7 @@ import json
 import os
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,6 +40,10 @@ from trustgate.core.models import (
 
 GENESIS_HASH = ""
 
+ENGINE_VERSION = "0.3.0.dev0"
+"""Stamped on every entry. Kept here, not imported, so the ledger has no
+dependency on package metadata being installed."""
+
 
 def compute_hash(entry: dict, prev_hash: str) -> str:
     """SHA-256 over the canonical entry body plus the previous link.
@@ -48,6 +53,103 @@ def compute_hash(entry: dict, prev_hash: str) -> str:
     """
     payload = json.dumps(entry, sort_keys=True, separators=(",", ":")) + prev_hash
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+UNHASHED_FIELDS = ("entry_hash", "sig")
+"""Fields that are about the hash, so cannot be inside it."""
+
+
+def hashed_body(entry: dict) -> dict:
+    """The part of an entry its `entry_hash` covers. One rule for every reader."""
+    return {k: v for k, v in entry.items() if k not in UNHASHED_FIELDS}
+
+
+def check_canonical(value, where: str = "entry") -> None:
+    """Raise if `value` holds anything a version 2 entry may not contain.
+
+    Version 2 bytes must be reproducible in any language. Floats are the one
+    JSON value languages print differently, so they are not allowed: time is
+    whole milliseconds (`ts_ms`). Keys must be ASCII so every language sorts
+    them the same way. See docs/LEDGER-FORMAT.md.
+    """
+    if isinstance(value, bool) or value is None or isinstance(value, int | str):
+        return
+    if isinstance(value, float):
+        raise ValueError(f"{where} holds a float; version 2 entries allow integers only")
+    if isinstance(value, list):
+        for i, item in enumerate(value):
+            check_canonical(item, f"{where}[{i}]")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str) or not key.isascii():
+                raise ValueError(f"{where} has a non-ASCII or non-string key {key!r}")
+            check_canonical(item, f"{where}.{key}")
+        return
+    raise ValueError(f"{where} holds a {type(value).__name__}, which JSON cannot carry")
+
+
+def entry_time(entry: dict) -> float:
+    """Seconds since the epoch, for an entry of either version."""
+    if entry.get("ts") is not None:
+        return float(entry["ts"])
+    if entry.get("ts_ms") is not None:
+        return int(entry["ts_ms"]) / 1000
+    return 0.0
+
+
+def action_digest(req: ActionRequest) -> str:
+    """`sha256:<hex>` of the full action: type, tool and every parameter.
+
+    The stored `action_redacted` is a short, redacted summary (for a file write
+    it is only the path). This digest commits to everything the tool received,
+    content included, without storing any of it.
+    """
+    canonical = json.dumps(
+        {"type": req.action.type.value, "tool": req.action.tool, "params": req.action.params},
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+@contextmanager
+def _file_lock(path: Path):
+    """Exclusive advisory lock across processes. No-op where flock is missing."""
+    try:
+        import fcntl
+    except ImportError:  # Windows: one process at a time is the caller's job
+        yield
+        return
+    with path.open("a") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def _lines_from_end(path: Path, block: int = 65536):
+    """Yield the file's non-empty lines, last line first."""
+    with path.open("rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        pos = fh.tell()
+        rest = b""
+        while pos > 0:
+            step = min(block, pos)
+            pos -= step
+            fh.seek(pos)
+            chunk = fh.read(step) + rest
+            parts = chunk.split(b"\n")
+            rest = parts[0]
+            for raw in reversed(parts[1:]):
+                text = raw.decode("utf-8", errors="replace").strip()
+                if text:
+                    yield text
+        text = rest.decode("utf-8", errors="replace").strip()
+        if text:
+            yield text
 
 
 @dataclass
@@ -64,22 +166,45 @@ class VerifyResult:
 
 
 class AuditLedger:
-    """Hash-chained append-only ledger backed by a local JSONL file."""
+    """Hash-chained append-only ledger backed by a local JSONL file.
 
-    def __init__(self, path: str | Path) -> None:
+    Every hook call is a new process, so the in-process lock alone is not
+    enough: two hooks fired together would both read the same tail and both
+    write the same `seq`, which breaks the chain for good. Each append
+    therefore takes an exclusive `flock` on a sidecar lock file, re-reads the
+    tail from disk while holding it, and only then writes.
+    """
+
+    def __init__(self, path: str | Path, signer=None) -> None:
         self.path = Path(path)
         self._lock = threading.Lock()
-        self._last_hash: str | None = None
-        self._next_seq: int | None = None
+        self.signer = signer
+        """Optional. Signs each entry (see core/signing.py). The guard room sets it."""
+
+    @property
+    def lock_path(self) -> Path:
+        return self.path.with_name(self.path.name + ".lock")
 
     # -- writing ----------------------------------------------------------
 
-    def write(self, req: ActionRequest, dec: Decision) -> AuditEntry:
-        """Append one entry and return it."""
-        with self._lock:
-            prev_hash, seq = self._tail()
+    def write(
+        self,
+        req: ActionRequest,
+        dec: Decision,
+        policy_digest: str = "",
+        stamps: dict | None = None,
+    ) -> AuditEntry:
+        """Append one decision and return it.
 
-            body = {
+        `policy_digest` names the exact policy bytes the decision was made
+        under; `action_digest` is a hash of the full tool input, content
+        included, so an approval or a report can be tied to the exact action
+        even though only a redacted summary is stored in the clear.
+        """
+
+        def build(seq: int, prev_hash: str) -> dict:
+            return {
+                **(stamps or {}),
                 "seq": seq,
                 "kind": "decision",
                 "request_id": req.request_id,
@@ -88,17 +213,15 @@ class AuditLedger:
                 "surface": req.surface,
                 "principal": req.principal.model_dump(),
                 "action_redacted": redact(req.action.raw or str(req.action.params)),
+                "action_digest": action_digest(req),
+                "policy_digest": policy_digest,
+                "engine_version": ENGINE_VERSION,
                 "effect": dec.effect.value,
                 "reasons": [r.model_dump() for r in dec.reasons],
                 "prev_hash": prev_hash,
             }
-            body["entry_hash"] = compute_hash(body, prev_hash)
 
-            self._append_line(body)
-            self._last_hash = body["entry_hash"]
-            self._next_seq = seq + 1
-
-            return AuditEntry.model_validate(body)
+        return AuditEntry.model_validate(self._append(build))
 
     def write_resolution(
         self,
@@ -116,10 +239,9 @@ class AuditLedger:
         is missing would lose the more interesting of the two facts. Callers
         that need the pairing use `open_escalations`.
         """
-        with self._lock:
-            prev_hash, seq = self._tail()
 
-            body = {
+        def build(seq: int, prev_hash: str) -> dict:
+            return {
                 "seq": seq,
                 "kind": "resolution",
                 "request_id": request_id,
@@ -130,37 +252,80 @@ class AuditLedger:
                 # Denial reasons are surface text and can quote the command.
                 "detail": redact(detail),
                 "gated": gated,
+                "engine_version": ENGINE_VERSION,
                 "prev_hash": prev_hash,
             }
+
+        return ResolutionEntry.model_validate(self._append(build))
+
+    def write_policy_change(
+        self, old_digest: str, new_digest: str, by: str, os_uid: int | None, note: str = ""
+    ):
+        """Record that the policy in force changed, and who changed it."""
+        from trustgate.core.models import PolicyChangeEntry
+
+        def build(seq: int, prev_hash: str) -> dict:
+            return {
+                "seq": seq,
+                "kind": "policy_change",
+                "ts": time.time(),
+                "old_digest": old_digest,
+                "new_digest": new_digest,
+                "by": by,
+                "os_uid": os_uid,
+                "note": redact(note),
+                "engine_version": ENGINE_VERSION,
+                "prev_hash": prev_hash,
+            }
+
+        return PolicyChangeEntry.model_validate(self._append(build))
+
+    def last_policy_digest(self) -> str:
+        """The new_digest of the most recent policy_change entry, or ""."""
+        for line in _lines_from_end(self.path) if self.path.is_file() else ():
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if entry.get("kind") == "policy_change":
+                return str(entry.get("new_digest", ""))
+        return ""
+
+    def _append(self, build) -> dict:
+        """Read the tail and append one line, as one step across processes."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock, _file_lock(self.lock_path):
+            prev_hash, seq = self._tail()
+            body = build(seq, prev_hash)
+            if self.signer is not None:
+                # Version 2: integers only, signed by this machine's key.
+                body["ts_ms"] = round(float(body.pop("ts")) * 1000)
+                body["v"] = 2
+                body["key_id"] = self.signer.key_id
+                check_canonical(body)
             body["entry_hash"] = compute_hash(body, prev_hash)
-
+            if self.signer is not None:
+                body["sig"] = self.signer.sign(body["entry_hash"])
             self._append_line(body)
-            self._last_hash = body["entry_hash"]
-            self._next_seq = seq + 1
-
-            return ResolutionEntry.model_validate(body)
+        return body
 
     def _tail(self) -> tuple[str, int]:
-        """Previous hash and next sequence number, read from disk once."""
-        if self._last_hash is not None and self._next_seq is not None:
-            return self._last_hash, self._next_seq
+        """Previous hash and next sequence number, read from the end of the file.
 
-        last_hash, seq = GENESIS_HASH, 0
-        if self.path.is_file():
-            with self.path.open("r", encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        entry = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    last_hash = entry.get("entry_hash", last_hash)
-                    seq = int(entry.get("seq", seq)) + 1
-
-        self._last_hash, self._next_seq = last_hash, seq
-        return last_hash, seq
+        Always read from disk, never cached: another process may have appended
+        since we last looked. Reads backwards in blocks, so the cost does not
+        grow with the size of the ledger. Lines that are not valid entries are
+        skipped, as before; `verify` is what reports them.
+        """
+        if not self.path.is_file():
+            return GENESIS_HASH, 0
+        for line in _lines_from_end(self.path):
+            try:
+                entry = json.loads(line)
+                return str(entry["entry_hash"]), int(entry["seq"]) + 1
+            except (ValueError, KeyError, TypeError):
+                continue
+        return GENESIS_HASH, 0
 
     def _append_line(self, body: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -226,8 +391,23 @@ class AuditLedger:
             except json.JSONDecodeError:
                 continue
             if entry.get("kind") == "resolution" and entry.get("request_id") == request_id:
-                return entry
+                return entry if self._is_chained(entry) else None
         return None
+
+    def _is_chained(self, entry: dict) -> bool:
+        """Whether an answer is a real, chained entry in an intact ledger.
+
+        A line appended by hand, without a valid place in the chain, is not an
+        answer. Neither is anything in a ledger whose chain is broken: once the
+        record has been tampered with, no line in it can approve an action.
+
+        This raises the cost of forging an approval; it does not remove it.
+        Any process running as the same OS user can still compute a valid
+        hash. Only the guard room (a separate OS user) closes that.
+        """
+        if not entry.get("entry_hash") or "seq" not in entry:
+            return False
+        return bool(self.verify())
 
     def find_open_escalation(self, correlation_id: str) -> dict | None:
         """The unanswered escalation matching a surface-native id, if any.
@@ -244,11 +424,17 @@ class AuditLedger:
         ]
         return matches[-1] if matches else None
 
-    def verify(self) -> VerifyResult:
+    def verify(self, public_keys: dict[str, str] | None = None) -> VerifyResult:
         """Recompute the chain and report the first broken link.
 
         This is what `trustgate verify-audit` calls, and what proves in a demo
         that an edited log is detectable rather than merely discouraged.
+
+        `public_keys` maps key ids to base64 Ed25519 public keys. With it,
+        every version 2 entry's signature is checked. Without it, the chain is
+        checked and the result says the signatures were not. Either way, once
+        a signed entry appears, an unsigned entry after it is a failure: an
+        unsigned line in a signing ledger was written by someone without the key.
         """
         if not self.path.is_file():
             return VerifyResult(ok=True, entries_checked=0, detail="no ledger yet")
@@ -256,6 +442,9 @@ class AuditLedger:
         prev_hash = GENESIS_HASH
         checked = 0
         expected_seq = 0
+        signed_seen = False
+        signatures_checked = 0
+        unsigned = 0
 
         with self.path.open("r", encoding="utf-8") as fh:
             for lineno, line in enumerate(fh, start=1):
@@ -291,7 +480,7 @@ class AuditLedger:
                     )
 
                 stated = entry.get("entry_hash", "")
-                body = {k: v for k, v in entry.items() if k != "entry_hash"}
+                body = hashed_body(entry)
                 if compute_hash(body, prev_hash) != stated:
                     return VerifyResult(
                         ok=False,
@@ -301,8 +490,54 @@ class AuditLedger:
                         "(this entry was modified after it was written)",
                     )
 
+                problem = self._signature_problem(entry, stated, signed_seen, public_keys)
+                if problem:
+                    return VerifyResult(
+                        ok=False, entries_checked=checked, broken_seq=seq,
+                        detail=f"line {lineno}: {problem}",
+                    )
+                if entry.get("v") == 2:
+                    signed_seen = True
+                    signatures_checked += public_keys is not None
+                else:
+                    unsigned += 1
+
                 prev_hash = stated
                 checked += 1
                 expected_seq += 1
 
-        return VerifyResult(ok=True, entries_checked=checked, detail="chain intact")
+        detail = "chain intact"
+        if public_keys is not None and unsigned:
+            # Not a failure (older entries were never signed), but a reader
+            # checking signatures must see how much of the log they cover.
+            detail += f", {unsigned} unsigned entries (written before signing began)"
+        if signed_seen:
+            detail += (
+                f", {signatures_checked} signatures verified"
+                if public_keys is not None
+                else ", signatures not checked (no public key given)"
+            )
+        return VerifyResult(ok=True, entries_checked=checked, detail=detail)
+
+    @staticmethod
+    def _signature_problem(entry, stated, signed_seen, public_keys) -> str:
+        if entry.get("v") != 2:
+            if signed_seen:
+                return "unsigned entry after signed entries (written without the machine key)"
+            return ""
+        if not entry.get("sig") or not entry.get("key_id"):
+            return "version 2 entry without a signature"
+        try:
+            check_canonical(hashed_body(entry))
+        except ValueError as exc:
+            return f"not in canonical form: {exc}"
+        if public_keys is None:
+            return ""
+        public = public_keys.get(entry["key_id"])
+        if public is None:
+            return f"signed by unknown key {entry['key_id']}"
+        from trustgate.core.signing import check_signature
+
+        if not check_signature(public, stated, entry["sig"]):
+            return "signature does not match (forged or altered entry)"
+        return ""

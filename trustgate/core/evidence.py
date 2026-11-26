@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from trustgate.core.audit import AuditLedger
+from trustgate.core.audit import AuditLedger, entry_time
 from trustgate.core.constitution import Constitution
 
 # What a reviewer's questionnaire tends to ask, and the part of the ledger that
@@ -37,10 +37,11 @@ from trustgate.core.constitution import Constitution
 QUESTION_MAP: tuple[tuple[str, str, str], ...] = (
     (
         "What prevents the AI system from taking unauthorised actions?",
-        "evidenced",
-        "Every action is checked against the written policy below before it runs, "
-        "outside the model, by code that cannot be argued with. Blocked attempts "
-        "are listed in this pack.",
+        "partial",
+        "Every action is checked against the written policy before it runs, outside "
+        "the model. Actions that match a rule are stopped or sent to a person, and "
+        "are listed in this pack. An action spelled in a way no rule matches is "
+        "allowed, so this is evidenced for actions that matched a rule.",
     ),
     (
         "Are AI actions logged, and for how long?",
@@ -75,12 +76,14 @@ QUESTION_MAP: tuple[tuple[str, str, str], ...] = (
     ),
     (
         "Who can change the policy, and is that change recorded?",
-        "not evidenced",
-        "The policy file is version controlled by the operator. This pack does not "
-        "evidence who changed it or when.",
+        "partial",
+        "Every decision records the hash of the policy file it was made under, so "
+        "a change shows up in the policy history table with its time. This pack "
+        "does not show who made the change.",
     ),
 )
 
+NO_POLICY_CHANGES = '<tr><td colspan="6">No recorded policy changes in this period.</td></tr>'
 NOTHING_BLOCKED = '<tr><td colspan="4">Nothing was blocked in this period.</td></tr>'
 NOTHING_ESCALATED = '<tr><td colspan="6">Nothing was escalated in this period.</td></tr>'
 
@@ -95,6 +98,9 @@ LIMITS: tuple[str, ...] = (
     "action had already run. They are a judgment, not an authorisation.",
     "Outcomes marked 'unknown' are escalations where the surface did not tell us "
     "clearly what the human decided. They are reported rather than assumed.",
+    "In a pack made from one machine's own ledger, every name in it was written by "
+    "that machine. Only a fleet pack from TrustGate Cloud shows a reviewer's name "
+    "that the machine did not write itself.",
 )
 
 
@@ -120,6 +126,34 @@ class EvidencePack:
 
     blocked: list[dict[str, Any]] = field(default_factory=list)
     escalations: list[dict[str, Any]] = field(default_factory=list)
+
+    report_policy_digest: str = ""
+    """Hash of the policy file loaded when the report was made."""
+
+    policy_history: list[dict[str, Any]] = field(default_factory=list)
+    """Each distinct policy the decisions in this period were made under, in
+    the order it first appeared: digest, first and last time, decision count."""
+
+    warnings: list[str] = field(default_factory=list)
+    """Plain sentences printed at the top under "Read this first"."""
+
+    policy_changes: list[dict[str, Any]] = field(default_factory=list)
+    """`policy_change` entries in the period: when, old and new hash, who."""
+
+    protection: Counter = field(default_factory=Counter)
+    """Decisions by protection level: 1 separate OS user, 0 same user, None unknown."""
+
+    @property
+    def policy_matches_report(self) -> bool:
+        """True when every decision was made under the policy shown below."""
+        used = {p["digest"] for p in self.policy_history}
+        return bool(self.report_policy_digest) and used == {self.report_policy_digest}
+
+    @property
+    def policy_heading(self) -> str:
+        if self.policy_matches_report:
+            return "Controls in force"
+        return "Policy file at report time"
 
     @property
     def answered(self) -> int:
@@ -176,8 +210,16 @@ def build_from_entries(
     constitution: Constitution | None = None,
     start: float | None = None,
     end: float | None = None,
+    cloud: bool = False,
 ) -> EvidencePack:
     """Count a pack from entries that may come from many machines.
+
+    With `cloud=True`, resolutions marked `"_source": "cloud"` are the Cloud's
+    own record of a named reviewer's answer, and every other resolution is a
+    line a machine wrote about itself. A machine is the party being audited,
+    so its line can never put a reviewer's name in the pack: the Cloud's answer
+    always wins, a machine-only answer is labelled as the machine's own claim,
+    and any disagreement is printed at the top. See `_cloud_resolution`.
 
     The caller is responsible for the chain verdict, because only the caller
     knows how the entries were verified: one local file re-hashed on the spot,
@@ -201,6 +243,7 @@ def build_from_entries(
 
     if constitution is not None:
         pack.constitution_name = constitution.metadata.name
+        pack.report_policy_digest = getattr(constitution, "digest", "")
         pack.principles = [
             {
                 "id": p.id,
@@ -213,21 +256,29 @@ def build_from_entries(
         ]
 
     resolutions: dict[str, dict] = {}
-    for entry in entries:
-        if entry.get("kind") != "resolution":
-            continue
-        rid = entry.get("request_id", "")
-        current = resolutions.get(rid)
-        if current is None or (entry.get("gated") and not current.get("gated")):
-            resolutions[rid] = entry
+    if cloud:
+        resolutions = _cloud_resolutions(entries, pack)
+    else:
+        for entry in entries:
+            if entry.get("kind") != "resolution":
+                continue
+            rid = entry.get("request_id", "")
+            current = resolutions.get(rid)
+            if current is None or (entry.get("gated") and not current.get("gated")):
+                resolutions[rid] = entry
 
     for entry in entries:
-        if entry.get("kind") == "resolution":
+        kind = entry.get("kind", "decision")
+        if kind == "policy_change" and _in_period(entry_time(entry), start, end):
+            pack.policy_changes.append(entry)
+        if kind != "decision":
             continue
-        if not _in_period(float(entry.get("ts", 0)), start, end):
+        if not _in_period(entry_time(entry), start, end):
             continue
 
         pack.decisions += 1
+        pack.protection[entry.get("protection_level")] += 1
+        _note_policy(pack, entry)
         effect = entry.get("effect", "")
         pack.effects[effect] += 1
         pack.surfaces[entry.get("surface", "unknown")] += 1
@@ -239,7 +290,148 @@ def build_from_entries(
                 {**entry, "resolution": resolutions.get(entry.get("request_id", ""))}
             )
 
+    _policy_warnings(pack)
     return pack
+
+
+CLOUD_METHOD_PREFIX = "cloud console"
+
+
+def _cloud_resolutions(entries: list[dict], pack: EvidencePack) -> dict[str, dict]:
+    """Pick one answer per request, where only the Cloud can name a reviewer."""
+    from_cloud: dict[str, dict] = {}
+    from_machines: dict[str, list[dict]] = {}
+    for entry in entries:
+        if entry.get("kind") != "resolution":
+            continue
+        rid = entry.get("request_id", "")
+        if entry.get("_source") == "cloud":
+            from_cloud[rid] = entry
+        else:
+            from_machines.setdefault(rid, []).append(entry)
+
+    chosen: dict[str, dict] = {}
+    for rid in set(from_cloud) | set(from_machines):
+        answer = from_cloud.get(rid)
+        claims = from_machines.get(rid, [])
+        if answer is not None:
+            chosen[rid] = _with_machine_report(answer, claims, pack, rid)
+        else:
+            chosen[rid] = _machine_claim(claims, pack, rid)
+    return chosen
+
+
+def _who(entry: dict) -> str:
+    return str((entry.get("approver") or {}).get("id", ""))
+
+
+def _with_machine_report(answer: dict, claims: list[dict], pack, rid: str) -> dict:
+    """The Cloud's answer, plus whether the machine says it was held waiting."""
+    out = dict(answer)
+    out["gated"] = False
+    for claim in claims:
+        agrees = claim.get("outcome") == answer.get("outcome") and _who(claim) == _who(answer)
+        if agrees and claim.get("gated"):
+            out["gated"] = True
+            out["gated_reported_by"] = claim.get("machine", "the machine")
+        elif not agrees and claim.get("outcome") in ("approved", "denied"):
+            pack.warnings.append(
+                f"Request {rid}: the machine's own record says {claim.get('outcome')} by "
+                f"{_who(claim) or 'nobody'}, but the Cloud records {answer.get('outcome')} by "
+                f"{_who(answer)}. The Cloud record is shown."
+            )
+    return out
+
+
+def _machine_claim(claims: list[dict], pack, rid: str) -> dict:
+    """No Cloud answer exists: show the machine's line as its own claim."""
+    best = next((c for c in claims if c.get("gated")), claims[0])
+    out = dict(best)
+    out["machine_claim"] = best.get("machine", "the machine")
+    method = str((best.get("approver") or {}).get("method", ""))
+    if method.startswith(CLOUD_METHOD_PREFIX) and best.get("outcome") in ("approved", "denied"):
+        pack.warnings.append(
+            f"Request {rid}: machine {out['machine_claim']} says a Cloud reviewer "
+            f"({_who(best)}) answered, but the Cloud has no such answer."
+        )
+    return out
+
+
+def _note_policy(pack: EvidencePack, entry: dict) -> None:
+    digest = str(entry.get("policy_digest", ""))
+    ts = entry_time(entry)
+    for row in pack.policy_history:
+        if row["digest"] == digest:
+            row["last"] = max(row["last"], ts)
+            row["first"] = min(row["first"], ts)
+            row["decisions"] += 1
+            return
+    pack.policy_history.append({"digest": digest, "first": ts, "last": ts, "decisions": 1})
+
+
+def _policy_warnings(pack: EvidencePack) -> None:
+    """Say plainly when the rules shown are not the rules that were applied."""
+    known = [p for p in pack.policy_history if p["digest"]]
+    unknown = [p for p in pack.policy_history if not p["digest"]]
+    recorded = {c.get("new_digest") for c in pack.policy_changes}
+    unexplained = [p for p in known[1:] if p["digest"] not in recorded]
+    if len(known) > 1 and unexplained:
+        pack.warnings.append(
+            f"The policy changed during this period: decisions were made under "
+            f"{len(known)} different policy files, and {len(unexplained)} of those "
+            "changes has no recorded policy change. See the policy history table."
+        )
+    level0 = pack.protection.get(0, 0)
+    if level0:
+        pack.warnings.append(
+            f"{level0} decision(s) were made by a gate running as the same OS user as "
+            "the agent (protection level 0, dev mode). For those, the agent could have "
+            "reached the gate's own files."
+        )
+    if unknown:
+        n = sum(p["decisions"] for p in unknown)
+        tail = (
+            " For those, the rules shown below are only the file at report time."
+            if pack.report_policy_digest
+            else ""
+        )
+        pack.warnings.append(
+            f"{n} decision(s) do not record which policy they were made under "
+            f"(written by an older version).{tail}"
+        )
+    if pack.report_policy_digest and known and not pack.policy_matches_report:
+        if all(p["digest"] != pack.report_policy_digest for p in known):
+            pack.warnings.append(
+                "The policy file at report time was not used for any decision in "
+                "this period. The rules listed below are not the ones that were applied."
+            )
+
+
+def questions(pack: EvidencePack) -> list[tuple[str, str, str]]:
+    """The review questions, with answers that depend on what this pack holds."""
+    out = []
+    for question, status, answer in QUESTION_MAP:
+        if question.startswith("Who can change the policy") and pack.policy_changes:
+            status = "evidenced"
+            answer = (
+                "The policy is held by the guard room and can only be replaced through its "
+                "admin socket. Every change is in the log with the old and new hash, the "
+                "name given and the OS user, listed under Policy changes."
+            )
+        out.append((question, status, answer))
+    return out
+
+
+def _protection_text(pack: EvidencePack) -> str:
+    names = {1: "separate OS user (level 1)", 0: "same OS user, dev mode (level 0)",
+             None: "not recorded"}
+    parts = [f"{names.get(k, k)}: {n}" for k, n in sorted(
+        pack.protection.items(), key=lambda kv: (kv[0] is None, -(kv[0] or 0)))]
+    return "; ".join(parts) or "no decisions"
+
+
+def _short(digest: str) -> str:
+    return digest.removeprefix("sha256:")[:12] if digest else "not recorded"
 
 
 # --------------------------------------------------------------------------
@@ -282,7 +474,18 @@ def _reason_of(entry: dict) -> str:
 def _authority(resolution: dict | None) -> str:
     if not resolution:
         return "no answer recorded"
+    if resolution.get("machine_claim"):
+        return f"machine's own record ({resolution['machine_claim']}), not checked by the Cloud"
+    if resolution.get("gated_reported_by"):
+        return f"held the action (as reported by {resolution['gated_reported_by']})"
     return "held the action" if resolution.get("gated") else "recorded afterwards"
+
+
+def _who_cell(resolution: dict) -> str:
+    who = (resolution.get("approver") or {}).get("id", "—")
+    if resolution.get("machine_claim"):
+        return f"{who} (claimed by {resolution['machine_claim']})"
+    return str(who)
 
 
 def to_markdown(pack: EvidencePack) -> str:
@@ -310,14 +513,41 @@ def to_markdown(pack: EvidencePack) -> str:
         w(f"- **Open, never answered: {len(pack.open_escalations)}**")
     if pack.unclear:
         w(f"- **Answer could not be established: {len(pack.unclear)}**")
+    w(f"- Gate isolation: {_protection_text(pack)}")
     w("")
 
+    if pack.warnings:
+        w("## Read this first\n")
+        for warning in pack.warnings:
+            w(f"- **{warning}**")
+        w("")
+
     if pack.principles:
-        w(f"## Controls in force: {pack.constitution_name}\n")
+        w(f"## {pack.policy_heading}: {pack.constitution_name}\n")
+        w(f"Policy file hash: `{_short(pack.report_policy_digest)}`\n")
         w("| Rule | What it says | How it is enforced |")
         w("|---|---|---|")
         for p in pack.principles:
             w(f"| `{p['id']}` | {p['statement']} | {p['enforcement']} ({p['effect']}) |")
+        w("")
+
+    if pack.policy_history:
+        w("## Policy history\n")
+        w("| Policy hash | First used | Last used | Decisions |")
+        w("|---|---|---|---|")
+        for p in pack.policy_history:
+            w(f"| `{_short(p['digest'])}` | {_when(p['first'])} | {_when(p['last'])} | "
+              f"{p['decisions']} |")
+        w("")
+
+    if pack.policy_changes:
+        w("## Policy changes\n")
+        w("| When | From | To | By | OS user | Note |")
+        w("|---|---|---|---|---|---|")
+        for c in pack.policy_changes:
+            w(f"| {_when(entry_time(c))} | `{_short(c.get('old_digest', ''))}` | "
+              f"`{_short(c.get('new_digest', ''))}` | {c.get('by', '')} | "
+              f"{c.get('os_uid', '')} | {c.get('note', '')} |")
         w("")
 
     if pack.blocked:
@@ -325,7 +555,7 @@ def to_markdown(pack: EvidencePack) -> str:
         w("| When | Action | Rule |")
         w("|---|---|---|")
         for e in pack.blocked:
-            w(f"| {_when(e.get('ts'))} | `{e.get('action_redacted','')}` | {_rule_of(e)} |")
+            w(f"| {_when(entry_time(e))} | `{e.get('action_redacted','')}` | {_rule_of(e)} |")
         w("")
 
     if pack.escalations:
@@ -334,9 +564,9 @@ def to_markdown(pack: EvidencePack) -> str:
         w("|---|---|---|---|---|---|")
         for e in pack.escalations:
             r = e.get("resolution") or {}
-            who = (r.get("approver") or {}).get("id", "—")
+            who = _who_cell(r) if r else "—"
             w(
-                f"| {_when(e.get('ts'))} | `{e.get('action_redacted','')}` | "
+                f"| {_when(entry_time(e))} | `{e.get('action_redacted','')}` | "
                 f"{_rule_of(e)} | {r.get('outcome', 'open')} | {who} | {_authority(r)} |"
             )
         w("")
@@ -344,7 +574,7 @@ def to_markdown(pack: EvidencePack) -> str:
     w("## Common review questions\n")
     w("| Question | Status | Answer |")
     w("|---|---|---|")
-    for question, status, answer in QUESTION_MAP:
+    for question, status, answer in questions(pack):
         w(f"| {question} | {status} | {answer} |")
     w("")
 
@@ -384,6 +614,8 @@ def to_html(pack: EvidencePack) -> str:
             f"<li><strong>{len(pack.unclear)}</strong> escalation(s) have an answer we "
             "could not establish, recorded as unknown rather than assumed.</li>"
         )
+    for warning in pack.warnings:
+        flags.append(f"<li><strong>{e(warning)}</strong></li>")
     if not pack.chain_ok:
         flags.append(
             f"<li><strong>The record failed its integrity check.</strong> "
@@ -406,7 +638,7 @@ def to_html(pack: EvidencePack) -> str:
     blocked = rows(
         pack.blocked,
         lambda b: (
-            _when(b.get("ts")),
+            _when(entry_time(b)),
             f"<code>{e(str(b.get('action_redacted','')))}</code>",
             f"<code>{e(_rule_of(b))}</code>",
             e(_reason_of(b)),
@@ -415,10 +647,10 @@ def to_html(pack: EvidencePack) -> str:
 
     def esc_cells(x):
         r = x.get("resolution") or {}
-        who = (r.get("approver") or {}).get("id", "—")
+        who = _who_cell(r) if r else "—"
         outcome = r.get("outcome", "open")
         return (
-            _when(x.get("ts")),
+            _when(entry_time(x)),
             f"<code>{e(str(x.get('action_redacted','')))}</code>",
             f"<code>{e(_rule_of(x))}</code>",
             f'<span class="pill {e(outcome)}">{e(outcome)}</span>',
@@ -427,8 +659,28 @@ def to_html(pack: EvidencePack) -> str:
         )
 
     escalations = rows(pack.escalations, esc_cells)
-    questions = rows(
-        QUESTION_MAP,
+    history = rows(
+        pack.policy_history,
+        lambda p: (
+            f"<code>{e(_short(p['digest']))}</code>",
+            _when(p["first"]),
+            _when(p["last"]),
+            str(p["decisions"]),
+        ),
+    )
+    changes = rows(
+        pack.policy_changes,
+        lambda c: (
+            _when(entry_time(c)),
+            f"<code>{e(_short(c.get('old_digest', '')))}</code>",
+            f"<code>{e(_short(c.get('new_digest', '')))}</code>",
+            e(str(c.get("by", ""))),
+            e(str(c.get("os_uid", ""))),
+            e(str(c.get("note", ""))),
+        ),
+    )
+    question_rows = rows(
+        questions(pack),
         lambda q: (e(q[0]), f'<span class="pill {q[1].split()[0]}">{e(q[1])}</span>', e(q[2])),
     )
     limits = "".join(f"<li>{e(x)}</li>" for x in LIMITS)
@@ -510,12 +762,24 @@ def to_html(pack: EvidencePack) -> str:
   {pack.chain_entries} entries checked. {e(pack.chain_detail)}.
   Each entry carries the hash of the entry before it, so altering or reordering
   any past line breaks every line after it.
+  <br>Gate isolation: {e(_protection_text(pack))}.
 </div>
 
-<h2>Controls in force</h2>
-<p class="sub">{e(pack.constitution_name)}</p>
+<h2>{e(pack.policy_heading)}</h2>
+<p class="sub">{e(pack.constitution_name)} &middot; policy file hash
+<code>{e(_short(pack.report_policy_digest))}</code></p>
 <table><thead><tr><th>Rule</th><th>What it says</th><th>Enforcement</th></tr></thead>
 <tbody>{principles or '<tr><td colspan="3">No policy loaded.</td></tr>'}</tbody></table>
+
+<h2>Policy history</h2>
+<table><thead><tr><th>Policy hash</th><th>First used</th><th>Last used</th>
+<th>Decisions</th></tr></thead>
+<tbody>{history or '<tr><td colspan="4">No decisions in this period.</td></tr>'}</tbody></table>
+
+<h2>Policy changes</h2>
+<table><thead><tr><th>When</th><th>From</th><th>To</th><th>By</th><th>OS user</th>
+<th>Note</th></tr></thead>
+<tbody>{changes or NO_POLICY_CHANGES}</tbody></table>
 
 <h2>Actions that were stopped</h2>
 <table><thead><tr><th>When</th><th>Action</th><th>Rule</th><th>Why</th></tr></thead>
@@ -528,7 +792,7 @@ def to_html(pack: EvidencePack) -> str:
 
 <h2>Common review questions</h2>
 <table><thead><tr><th>Question</th><th>Status</th><th>Answer</th></tr></thead>
-<tbody>{questions}</tbody></table>
+<tbody>{question_rows}</tbody></table>
 
 <h2>What this does not prove</h2>
 <div class="limits"><ul>{limits}</ul></div>
@@ -565,6 +829,11 @@ def to_json(pack: EvidencePack) -> str:
                 "detail": pack.chain_detail,
             },
             "constitution": pack.constitution_name,
+            "report_policy_digest": pack.report_policy_digest,
+            "policy_history": pack.policy_history,
+            "warnings": pack.warnings,
+            "policy_changes": pack.policy_changes,
+            "protection_levels": {str(k): v for k, v in pack.protection.items()},
             "decisions": pack.decisions,
             "effects": dict(pack.effects),
             "surfaces": dict(pack.surfaces),

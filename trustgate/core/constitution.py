@@ -11,16 +11,18 @@ Spec: Master Build Document v3.0, Part D.
 
 from __future__ import annotations
 
+import hashlib
+import math
 import re
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, model_validator
 
 from trustgate.core.models import ActionRequest, ActionType, Effect
-from trustgate.core.normalize import extract_paths, path_matches_glob
+from trustgate.core.normalize import extract_paths, matches_globs
 
 
 class ConstitutionError(Exception):
@@ -166,24 +168,26 @@ class Principle(BaseModel):
             req.action.type.value, req.action.tool, req.action.params, req.action.raw
         )
         globs = self.match.touches_paths or []
-        return any(path_matches_glob(p, g) for p in paths for g in globs)
+        return any(matches_globs(p, globs) for p in paths)
 
     def _param_gt_fires(self, req: ActionRequest) -> bool:
         """Strictly greater-than: "refunds over $100" leaves exactly $100 allowed.
 
-        A missing or non-numeric parameter does not fire. A threshold rule
-        describes a value that is present and too large; an absent value is the
-        Action Guard's problem, not a numeric bound's.
+        Fails closed. A value that is not a plain number (`"250 USD"`, `"$250"`,
+        `"250,00"`, `"nan"`, `[250]`, `{"value": 250}`) fires, because the rule
+        cannot tell it is small. A missing value fires too when the rule names
+        its tools: `issue_refund(amount_cents=25000)` is still a refund. A
+        threshold rule with no tool list ignores missing values, or it would
+        fire on every action that has no such field.
         """
         for key, threshold in (self.match.param_gt or {}).items():
-            value = req.action.params.get(key)
-            if isinstance(value, bool) or not isinstance(value, int | float | str):
-                continue
-            try:
-                if float(value) > threshold:
+            if key not in req.action.params:
+                if self.match.tool:
                     return True
-            except (TypeError, ValueError):
                 continue
+            number = plain_number(req.action.params[key])
+            if number is None or number > threshold:
+                return True
         return False
 
     def compiled_patterns(self) -> list[re.Pattern[str]]:
@@ -231,6 +235,33 @@ class Constitution(BaseModel):
     metadata: Metadata = Field(default_factory=Metadata)
     principles: list[Principle] = Field(default_factory=list)
 
+    unknown_tools: Literal["allow", "escalate", "block"] = "allow"
+    """What happens to a `tool_call` whose tool no principle names and that is
+    not in `known_tools`. `allow` keeps the old behaviour. A voice or support
+    policy should say `escalate`: an agent that calls `wire_money` when the
+    policy only knows `transfer_funds` must not get through on a spelling."""
+
+    known_tools: list[str] = Field(default_factory=list)
+    """Tools that are fine to call with no rule about them (status lookups)."""
+
+    _digest: str = PrivateAttr(default="")
+    _source: str = PrivateAttr(default="")
+
+    @property
+    def source(self) -> str:
+        """The file this was loaded from, if any. Protected from agent writes."""
+        return self._source
+
+    @property
+    def digest(self) -> str:
+        """SHA-256 of the exact policy bytes this was loaded from.
+
+        Stamped on every ledger entry, so a report can show which policy was in
+        force for each decision rather than whatever file exists on report day.
+        Empty for a constitution built in code rather than loaded from text.
+        """
+        return self._digest
+
     @model_validator(mode="after")
     def _check_unique_ids(self) -> Constitution:
         seen: set[str] = set()
@@ -244,6 +275,16 @@ class Constitution(BaseModel):
         return self
 
     # -- accessors (Part D.4) ---------------------------------------------
+
+    def knows_tool(self, tool: str) -> bool:
+        """Whether this policy names `tool` anywhere: a rule or `known_tools`."""
+        name = tool.lower()
+        if name in {t.lower() for t in self.known_tools}:
+            return True
+        return any(
+            p.match is not None and p.match.tool and name in {t.lower() for t in p.match.tool}
+            for p in self.principles
+        )
 
     @property
     def deterministic_principles(self) -> list[Principle]:
@@ -274,7 +315,9 @@ class Constitution(BaseModel):
             text = path.read_text(encoding="utf-8")
         except OSError as exc:
             raise ConstitutionError(f"cannot read constitution at {path}: {exc}") from exc
-        return cls.from_yaml(text, source=str(path))
+        constitution = cls.from_yaml(text, source=str(path))
+        constitution._source = str(path.resolve())
+        return constitution
 
     @classmethod
     def from_yaml(cls, text: str, source: str = "<string>") -> Constitution:
@@ -289,9 +332,33 @@ class Constitution(BaseModel):
             )
 
         try:
-            return cls.model_validate(data)
+            constitution = cls.model_validate(data)
         except ValidationError as exc:
             raise ConstitutionError(_format_errors(source, data, exc)) from exc
+        constitution._digest = policy_digest(text)
+        return constitution
+
+
+def policy_digest(text: str | bytes) -> str:
+    """`sha256:<hex>` of policy text. One function so every caller agrees."""
+    data = text.encode("utf-8") if isinstance(text, str) else text
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+_PLAIN_NUMBER = re.compile(r"\s*-?\d+(\.\d+)?\s*")
+
+
+def plain_number(value: Any) -> float | None:
+    """The value as a finite number, or None if it is anything else."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        number = float(value)
+    elif isinstance(value, str) and _PLAIN_NUMBER.fullmatch(value):
+        number = float(value)
+    else:
+        return None
+    return number if math.isfinite(number) else None
 
 
 def compile_patterns(patterns: list[str], principle_id: str) -> list[re.Pattern[str]]:

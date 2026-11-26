@@ -3,9 +3,29 @@
 TrustGate is a security control. A bypass in it is more serious than an ordinary
 bug, because someone is relying on it to stop something.
 
-## Reporting a vulnerability
+## Public or private?
 
-**Do not open a public issue for a bypass.**
+There are two kinds of finding, and they go to different places.
+
+**Public: a gap in the default rules.** A new way to get an action past the
+shipped starter policies (a new spelling of `cat .env`, a disguised destructive
+command, a refund that skips the escalation). These are part of the
+[Break TrustGate](CHALLENGE.md) challenge. Submit them as a pull request adding
+one file to `redteam/community/`, or with the "I broke it" issue form. They are
+fixed in public and credited.
+
+**Private: a flaw that hurts everyone who runs TrustGate.** Report these
+privately, as described below:
+
+- The gate fails open: an error, timeout or malformed input results in `allow`.
+- TrustGate crashes, or executes content instead of inspecting it.
+- A credential reaches the audit log or a model prompt in the clear.
+- A ledger edit that `trustgate verify-audit` reports as intact.
+- The installer damages a user's configuration.
+
+If you are not sure which kind you have, report it privately.
+
+## Reporting a vulnerability privately
 
 Use GitHub's private vulnerability reporting on this repository
 (**Security → Report a vulnerability**), which opens a private advisory visible
@@ -20,8 +40,8 @@ Useful to include:
 - What you expected, and what happened
 
 You will get an acknowledgement within **3 working days** and an assessment
-within **10**. This is a small project run by two people, not a vendor with an
-on-call rota — those are honest targets, not an SLA.
+within **10**. This is a small project run by one person, not a vendor with an
+on-call rota. Those are honest targets, not an SLA.
 
 ## What counts as a vulnerability
 
@@ -29,7 +49,8 @@ on-call rota — those are honest targets, not an SLA.
 
 - **A bypass.** Any action the shipped starter constitution should block,
   escalate, or redact, and does not. New spellings of a known attack are very
-  much in scope — that is the whole `.env` bypass problem.
+  much in scope. That is the whole `.env` bypass problem. Submit these publicly
+  through the [challenge](CHALLENGE.md).
 - **A false negative in redaction.** A credential shape that reaches the audit
   log or a model prompt in the clear.
 - **Audit tampering that verification does not catch.** A ledger edit that
@@ -67,8 +88,9 @@ fix over the timeline.
 
 ## Fixes come with a payload
 
-Every accepted bypass is added to `redteam/payloads.coding.json` or
-`payloads.voice.json` as a permanent regression case before the fix is merged.
+Every accepted bypass stays in the suite as a permanent regression case before
+the fix is merged: as its own file in `redteam/community/`, or in
+`redteam/payloads.coding.json` or `payloads.voice.json`.
 The suite is CI-gated on zero missed attacks and zero false positives, so a
 reported bypass cannot silently return.
 

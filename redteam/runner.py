@@ -23,6 +23,14 @@ from trustgate.core.models import Action, ActionRequest, Context, Decision
 
 DEFAULT_PAYLOADS = Path(__file__).with_name("payloads.coding.json")
 
+# One small file per outside attack, so adding one is a one-file pull request.
+# See CHALLENGE.md for the format and the rules.
+COMMUNITY_DIR = Path(__file__).with_name("community")
+COMMUNITY_SUFFIXES = (".yaml", ".yml")
+COMMUNITY_FIELDS = ("id", "author", "surface", "description", "action", "expect")
+COMMUNITY_EXPECT = ("block", "escalate", "allow")
+SURFACES = ("coding", "voice")
+
 # Attacks are "handled" if the engine did not let them through silently.
 # Escalation counts: a human being asked is a successful intervention, and
 # several payloads (config writes, production changes) are specified to escalate
@@ -39,6 +47,12 @@ class CaseResult:
     passed: bool
     reasons: list[str]
     latency_ms: float
+    author: str = ""
+    source: str = ""
+
+    @property
+    def is_community(self) -> bool:
+        return bool(self.source)
 
     @property
     def is_control(self) -> bool:
@@ -48,6 +62,79 @@ class CaseResult:
 def load_cases(path: Path | str = DEFAULT_PAYLOADS) -> list[dict[str, Any]]:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     return data["cases"]
+
+
+class CommunityFileError(ValueError):
+    """A community attack file that cannot be read. Names the file, never a traceback."""
+
+
+def load_community(directory: Path | str | None, surface: str) -> list[dict[str, Any]]:
+    """Every community case for one surface, as ordinary case dicts.
+
+    Files for the other surface are skipped rather than rejected: the coding and
+    voice suites run against different policies, and one directory holds both.
+    """
+    if directory is None:
+        return []
+    directory = Path(directory)
+    if not directory.is_dir():
+        return []
+
+    import yaml
+
+    cases: list[dict[str, Any]] = []
+    seen: dict[str, str] = {}
+    for path in sorted(directory.iterdir()):
+        if path.suffix not in COMMUNITY_SUFFIXES or path.name.startswith("_"):
+            continue
+        rel = f"redteam/community/{path.name}"
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as exc:
+            raise CommunityFileError(f"{rel}: not valid YAML: {exc}") from exc
+        if not isinstance(data, dict):
+            got = type(data).__name__
+            raise CommunityFileError(f"{rel}: expected a mapping of fields, got {got}")
+
+        missing = [f for f in COMMUNITY_FIELDS if not data.get(f)]
+        if missing:
+            raise CommunityFileError(f"{rel}: missing field(s): {', '.join(missing)}")
+
+        case_id = str(data["id"])
+        if case_id != path.stem:
+            raise CommunityFileError(
+                f"{rel}: id {case_id!r} must match the file name {path.stem!r}"
+            )
+        if case_id in seen:
+            raise CommunityFileError(f"{rel}: id {case_id!r} is already used by {seen[case_id]}")
+        seen[case_id] = rel
+
+        if data["surface"] not in SURFACES:
+            raise CommunityFileError(f"{rel}: surface must be one of {', '.join(SURFACES)}")
+        if data["expect"] not in COMMUNITY_EXPECT:
+            raise CommunityFileError(f"{rel}: expect must be one of {', '.join(COMMUNITY_EXPECT)}")
+        action = data["action"]
+        if not isinstance(action, dict) or not action.get("type") or not action.get("tool"):
+            raise CommunityFileError(f"{rel}: action needs at least a type and a tool")
+
+        case = {
+            "name": f"community/{case_id}",
+            "category": "control" if data["expect"] == "allow" else "community",
+            "surface": data["surface"],
+            "action": action,
+            "context": data.get("context") or {},
+            "expect": data["expect"],
+            "author": str(data["author"]).lstrip("@"),
+            "source": rel,
+        }
+        try:
+            case_to_request(case)
+        except Exception as exc:  # noqa: BLE001  pydantic, type errors: all user input
+            raise CommunityFileError(f"{rel}: action does not match the schema: {exc}") from exc
+
+        if data["surface"] == surface:
+            cases.append(case)
+    return cases
 
 
 def case_to_request(case: dict[str, Any], surface: str = "coding") -> ActionRequest:
@@ -89,8 +176,10 @@ def run(
     payloads_path: Path | str = DEFAULT_PAYLOADS,
     audit_path: Path | str | None = None,
     judge=None,
+    community_dir: Path | str | None = COMMUNITY_DIR,
 ) -> list[CaseResult]:
     constitution = Constitution.from_file(constitution_path)
+    surface = constitution.metadata.surface or "coding"
     engine = Engine(
         constitution=constitution,
         audit=AuditLedger(audit_path) if audit_path else None,
@@ -98,7 +187,8 @@ def run(
     )
 
     results: list[CaseResult] = []
-    for case in load_cases(payloads_path):
+    cases = load_cases(payloads_path) + load_community(community_dir, surface)
+    for case in cases:
         decision = engine.decide(case_to_request(case))
         results.append(
             CaseResult(
@@ -109,6 +199,8 @@ def run(
                 passed=score(case, decision),
                 reasons=[r.rule_id for r in decision.reasons],
                 latency_ms=decision.latency_ms,
+                author=case.get("author", ""),
+                source=case.get("source", ""),
             )
         )
     return results
@@ -160,7 +252,15 @@ def format_table(results: list[CaseResult]) -> str:
             rules = ", ".join(r.reasons) or "no rule recorded"
             lines.append(f"  {r.name:<38} {r.actual:<9} [{rules}]")
 
-    misses = [r for r in attacks if not r.passed]
+    bypasses = [r for r in attacks if r.is_community and not r.passed]
+    if bypasses:
+        lines.append("")
+        lines.append("BYPASS FOUND (outside attacks the default rules let through):")
+        for r in bypasses:
+            lines.append(f"  {r.name:<38} by @{r.author}: expected {r.expected}, got {r.actual}")
+            lines.append(f"  {'':<38} file: {r.source}")
+
+    misses = [r for r in attacks if not r.passed and not r.is_community]
     if misses:
         lines.append("")
         lines.append("MISSED ATTACKS:")
@@ -183,3 +283,23 @@ def summarize(results: list[CaseResult]) -> tuple[int, int]:
     missed = sum(1 for r in results if not r.is_control and not r.passed)
     false_positives = sum(1 for r in results if r.is_control and not r.passed)
     return missed, false_positives
+
+
+def community_counts(results: list[CaseResult]) -> tuple[int, int]:
+    """Returns (community cases run, community bypasses)."""
+    community = [r for r in results if r.is_community]
+    bypasses = sum(1 for r in community if not r.is_control and not r.passed)
+    return len(community), bypasses
+
+
+def github_annotations(results: list[CaseResult]) -> list[str]:
+    """Workflow commands that mark each bypass as a clear error on the PR."""
+    out = []
+    for r in results:
+        if r.is_community and not r.passed:
+            kind = "False positive" if r.is_control else "Bypass found"
+            out.append(
+                f"::error file={r.source},title={kind}::{r.name} by @{r.author}: "
+                f"expected {r.expected}, got {r.actual}"
+            )
+    return out

@@ -193,10 +193,14 @@ class CloudResolutions:
         self.uploaded = res.ok
 
     def find_resolution(self, request_id: str) -> dict[str, Any] | None:
-        local = self.ledger.find_resolution(request_id)
-        if local is not None:
-            return local
+        """The Cloud's answer, and only the Cloud's.
 
+        The local ledger is deliberately not consulted. Any process on this
+        machine, including the agent being gated, can append a line to that
+        file, so a "resolution" found there is a claim by the audited party,
+        not an answer from a reviewer. In fleet mode the reviewer is in the
+        Cloud, so the Cloud is the only place an answer can come from.
+        """
         self._ensure_uploaded()
         url = f"{self.cloud.url.rstrip('/')}/v1/escalations/{request_id}/resolution"
         status, body = self.transport(

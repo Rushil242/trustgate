@@ -137,7 +137,11 @@ def _permission_for(decision: Decision) -> tuple[str, str]:
         return "deny", f"Blocked by TrustGate. {summarize(decision)}"
 
     if decision.effect is Effect.escalate:
-        return "ask", f"TrustGate requires human approval. {summarize(decision)}"
+        return (
+            "ask",
+            f"TrustGate requires human approval (request {decision.request_id}). "
+            f"{summarize(decision)}",
+        )
 
     # modify: V1 refuses rather than rewriting. Silently altering a command the
     # agent believes it ran is its own kind of unsafe, and the agent would
@@ -192,7 +196,7 @@ def decide(payload: dict[str, Any], engine=None, config=None) -> dict[str, Any]:
     return to_hook_response(decision)
 
 
-def _await_remote_decision(decision: Decision, cfg) -> dict[str, Any]:
+def _await_remote_decision(decision: Decision, cfg, source=None) -> dict[str, Any]:
     """Hold the tool call until someone answers in the console.
 
     Claude Code is blocked for the whole of this, which is the point: an
@@ -204,15 +208,17 @@ def _await_remote_decision(decision: Decision, cfg) -> dict[str, Any]:
     from trustgate.core.audit import AuditLedger
 
     try:
-        ledger = AuditLedger(cfg.audit_path)
-        source = ledger
-        if getattr(cfg, "cloud", None) is not None and cfg.cloud.enabled:
+        if source is not None:
+            pass  # the guard room passes its own in-memory answers
+        elif getattr(cfg, "cloud", None) is not None and cfg.cloud.enabled:
             # Fleet mode: the escalation is pushed to the cloud and a reviewer
             # anywhere can answer it. Falls back to waiting on nothing if the
             # cloud is unreachable, which expires into a refusal.
             from trustgate.core.sync import CloudResolutions
 
-            source = CloudResolutions(cfg.cloud, ledger)
+            source = CloudResolutions(cfg.cloud, AuditLedger(cfg.audit_path))
+        else:
+            source = AuditLedger(cfg.audit_path)
         result = wait_for_decision(
             source,
             decision.request_id,
@@ -281,14 +287,19 @@ def _build_engine(config=None):
     constitution = Constitution.from_file(cfg.constitution_path)
 
     judge = None
-    if cfg.judge.enabled:
+    if cfg.judge.active:
         from trustgate.core.guards.constitution_llm import ConstitutionGuard
         from trustgate.core.llm import build_llm
 
         judge = ConstitutionGuard(constitution, build_llm(cfg.judge))
 
+    from trustgate.core.pins import is_trusted
+
     return Engine(
-        constitution=constitution, audit=AuditLedger(cfg.audit_path), judge=judge
+        constitution=constitution,
+        audit=AuditLedger(cfg.audit_path),
+        judge=judge,
+        policy_trusted=is_trusted(constitution.digest),
     )
 
 
