@@ -358,7 +358,7 @@ Self-measured: I wrote these attacks and the defences. [CHALLENGE.md](CHALLENGE.
 | False positives | **0** | **0** |
 | Median decision latency | **0.10 ms** | **0.03 ms** |
 
-These are the engine alone. A full hook call starts a new Python process each time, and takes between 85 and 175 ms on the laptop it was tested on, almost all of it Python start-up. Against a 50 ms budget for the whole deterministic path. **Both numbers are CI gates** — one missed attack *or* one blocked legitimate command fails the build. Run them yourself with `uv run trustgate test`.
+These are the engine alone. A full hook call starts a new Python process each time, and takes between 85 and 175 ms on the laptop it was tested on, almost all of it Python start-up. Against a 50 ms budget for the whole deterministic path. **Both numbers are CI gates**: one missed attack *or* one blocked legitimate command fails the build. Run them yourself with `uv run trustgate test`.
 
 ---
 

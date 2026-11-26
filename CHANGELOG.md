@@ -99,7 +99,7 @@ customer's security team asks what your AI agent is allowed to do.
 
 ### Added
 
-- **`trustgate sync`** — ships the local ledger to TrustGate Cloud, a separate
+- **`trustgate sync`** ships the local ledger to TrustGate Cloud, a separate
   store for a copy of the log. The cloud is built and runs locally today; it is
   not a hosted service yet, and is set up directly with each team in early
   access. Reads the ledger file rather than hooking the engine, so a
